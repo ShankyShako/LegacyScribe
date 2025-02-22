@@ -6,6 +6,15 @@ Press-and-hold a hotkey to transcribe your voice and paste the result wherever y
 
 I've opened sourced the project in the hopes that others will find it useful! We rely on the awesome [WhisperKit](https://github.com/argmaxinc/WhisperKit) for transcription, and the incredible [Swift Composable Architecture](https://github.com/pointfreeco/swift-composable-architecture) for structuring the app. Please open issues with any questions or feedback! ❤️
 
+## Instructions
+
+Once you open Hex, you'll need to grant it microphone and accessibility permissions—so it can record your voice and paste the text into any application, respectively.
+
+Once you've configured a global hotkey, there are **two recording modes**:
+
+1. **Press-and-hold** the hotkey to begin recording, say whatever you want, and then release the hotkey to kick off the transcription process. 
+2. **Double-tap** the hotkey to *lock recording*, say whatever you want, and then **tap** the hotkey once more to kick off the trascription process.
+
 ## Project Structure
 
 Hex is organized into several directories, each serving a specific purpose:
