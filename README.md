@@ -4,16 +4,16 @@ Press-and-hold a hotkey to transcribe your voice and paste the result wherever y
 
 **[Download Hex for macOS](https://hex-updates.s3.us-east-1.amazonaws.com/hex-latest.dmg)**
 
-I've opened sourced the project in the hopes that others will find it useful! We rely on the awesome [WhisperKit](https://github.com/argmaxinc/WhisperKit) for transcription, and the incredible [Swift Composable Architecture](https://github.com/pointfreeco/swift-composable-architecture) for structuring the app. Please open issues with any questions or feedback! ❤️
+I've opened-sourced the project in the hopes that others will find it useful! We rely on the awesome [WhisperKit](https://github.com/argmaxinc/WhisperKit) for transcription, and the incredible [Swift Composable Architecture](https://github.com/pointfreeco/swift-composable-architecture) for structuring the app. Please open issues with any questions or feedback! ❤️
 
 ## Instructions
 
-Once you open Hex, you'll need to grant it microphone and accessibility permissions—so it can record your voice and paste the text into any application, respectively.
+Once you open Hex, you'll need to grant it microphone and accessibility permissions—so it can record your voice and paste the transcribed text into any application, respectively.
 
 Once you've configured a global hotkey, there are **two recording modes**:
 
-1. **Press-and-hold** the hotkey to begin recording, say whatever you want, and then release the hotkey to kick off the transcription process. 
-2. **Double-tap** the hotkey to *lock recording*, say whatever you want, and then **tap** the hotkey once more to kick off the trascription process.
+1. **Press-and-hold** the hotkey to begin recording, say whatever you want, and then release the hotkey to start the transcription process. 
+2. **Double-tap** the hotkey to *lock recording*, say whatever you want, and then **tap** the hotkey once more to start the transcription process.
 
 ## Project Structure
 
