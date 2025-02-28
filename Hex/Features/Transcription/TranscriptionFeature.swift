@@ -263,12 +263,21 @@ private extension TranscriptionFeature {
     state.isTranscribing = true
     state.error = nil
     let model = state.hexSettings.selectedModel
+    let language = state.hexSettings.outputLanguage
 
     return .run { send in
       do {
         await soundEffect.play(.stopRecording)
         let audioURL = await recording.stopRecording()
-        let result = try await transcription.transcribe(audioURL, model) { _ in }
+
+        // Create transcription options with the selected language
+        let decodeOptions = DecodingOptions(
+          language: language,
+          detectLanguage: language == nil, // Only auto-detect if no language specified
+          chunkingStrategy: .vad
+        )
+
+        let result = try await transcription.transcribe(audioURL, model, decodeOptions) { _ in }
         print("Transcribed audio from URL: \(audioURL) to text: \(result)")
         await send(.transcriptionResult(result))
       } catch {
