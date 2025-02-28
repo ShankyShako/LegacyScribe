@@ -41,6 +41,7 @@ struct SettingsFeature {
     case startSettingHotKey
     case keyEvent(KeyEvent)
     case toggleOpenOnLogin(Bool)
+    case togglePreventSystemSleep(Bool)
     case checkPermissions
     case setMicrophonePermission(PermissionStatus)
     case setAccessibilityPermission(PermissionStatus)
@@ -124,6 +125,10 @@ struct SettingsFeature {
             try? SMAppService.mainApp.unregister()
           }
         }
+
+      case let .togglePreventSystemSleep(enabled):
+        state.$hexSettings.withLock { $0.preventSystemSleep = enabled }
+        return .none
 
       // Permissions
       case .checkPermissions:

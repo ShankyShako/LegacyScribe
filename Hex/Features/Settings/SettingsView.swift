@@ -110,6 +110,17 @@ struct SettingsView: View {
 				} icon: {
 					Image(systemName: "dock.rectangle")
 				}
+
+				Label {
+					Toggle(
+						"Prevent System Sleep while Recording",
+						isOn: Binding(
+							get: { store.hexSettings.preventSystemSleep },
+							set: { store.send(.togglePreventSystemSleep($0)) }
+						))
+				} icon: {
+					Image(systemName: "zzz")
+				}
 			} header: {
 				Text("General")
 			}
