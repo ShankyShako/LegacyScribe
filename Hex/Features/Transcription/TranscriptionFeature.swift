@@ -9,6 +9,8 @@ import ComposableArchitecture
 import CoreGraphics
 import SwiftUI
 import WhisperKit
+import IOKit
+import IOKit.pwr_mgt
 
 @Reducer
 struct TranscriptionFeature {
@@ -19,6 +21,7 @@ struct TranscriptionFeature {
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
+    var assertionID: IOPMAssertionID?
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
   }
@@ -225,6 +228,11 @@ private extension TranscriptionFeature {
     state.isRecording = true
     state.recordingStartTime = Date()
 
+    // Prevent system sleep during recording
+    if state.hexSettings.preventSystemSleep {
+      preventSystemSleep(&state)
+    }
+
     return .run { _ in
       await recording.startRecording()
       await soundEffect.play(.startRecording)
@@ -233,6 +241,11 @@ private extension TranscriptionFeature {
 
   func handleStopRecording(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
+
+    // Allow system to sleep again by releasing the power management assertion
+    // Always call this, even if the setting is off, to ensure we don’t leak assertions
+    //  (e.g. if the setting was toggled off mid-recording)
+    reallowSystemSleep(&state)
 
     let durationIsLongEnough: Bool = {
       guard let startTime = state.recordingStartTime else { return false }
@@ -370,6 +383,34 @@ private extension TranscriptionFeature {
         await soundEffect.play(.cancel)
       }
     )
+  }
+}
+
+// MARK: - System Sleep Prevention
+
+private extension TranscriptionFeature {
+  func preventSystemSleep(_ state: inout State) {
+    // Prevent system sleep during recording
+    let reasonForActivity = "Hex Voice Recording" as CFString
+    var assertionID: IOPMAssertionID = 0
+    let success = IOPMAssertionCreateWithName(
+      kIOPMAssertionTypeNoDisplaySleep as CFString,
+      IOPMAssertionLevel(kIOPMAssertionLevelOn),
+      reasonForActivity,
+      &assertionID
+    )
+    if success == kIOReturnSuccess {
+      state.assertionID = assertionID
+    }
+  }
+
+  func reallowSystemSleep(_ state: inout State) {
+    if let assertionID = state.assertionID {
+      let releaseSuccess = IOPMAssertionRelease(assertionID)
+      if releaseSuccess == kIOReturnSuccess {
+        state.assertionID = nil
+      }
+    }
   }
 }
 
