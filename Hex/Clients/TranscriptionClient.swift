@@ -187,6 +187,7 @@ actor TranscriptionClientLive {
 
     let decodeOptions = DecodingOptions(
       language: nil, // TODO: Allow the user to set ther preferred language in Settings
+      detectLanguage: true,
       chunkingStrategy: .vad
     )
 
