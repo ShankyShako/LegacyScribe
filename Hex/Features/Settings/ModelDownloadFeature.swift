@@ -47,6 +47,8 @@ public struct ModelDownloadFeature {
 		case downloadSelectedModel
 		case downloadProgress(Double)
 		case downloadResponse(Result<String, Error>)
+
+		case deleteSelectedModel
 	}
 
 	@Dependency(\.transcription) var transcription
@@ -108,6 +110,21 @@ public struct ModelDownloadFeature {
 							Task { await send(.downloadProgress(prog.fractionCompleted)) }
 						}
 						await send(.downloadResponse(.success(model)))
+					} catch {
+						await send(.downloadResponse(.failure(error)))
+					}
+				}
+
+			// 4) Delete the currently selected model
+			case .deleteSelectedModel:
+				let model = state.hexSettings.selectedModel
+				guard !model.isEmpty else { return .none }
+				
+				return .run { send in
+					do {
+						try await transcription.deleteModel(model)
+						// After deletion, reload the model list to get accurate download statuses
+						await send(.fetchModels)
 					} catch {
 						await send(.downloadResponse(.failure(error)))
 					}
@@ -182,6 +199,17 @@ struct ModelDownloadView: View {
 					.padding(.vertical, 4)
 			}
 		} else {
+			// Show Delete button if model is downloaded
+			if let selectedInfo = store.availableModels
+				.first(where: { $0.name == store.hexSettings.selectedModel }),
+				selectedInfo.isDownloaded
+			{
+				Button(role: .destructive, action: {
+					store.send(.deleteSelectedModel)
+				}) {
+					Text("Delete Selected Model")
+				}
+			}
 			// Show Download button if not downloaded yet
 			if let selectedInfo = store.availableModels
 				.first(where: { $0.name == store.hexSettings.selectedModel }),
