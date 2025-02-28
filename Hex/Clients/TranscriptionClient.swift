@@ -22,6 +22,9 @@ struct TranscriptionClient {
   /// Ensures a model is downloaded (if missing) and loaded into memory, reporting progress via `progressCallback`.
   var downloadModel: @Sendable (String, @escaping (Progress) -> Void) async throws -> Void
 
+  /// Deletes a model from disk if it exists
+  var deleteModel: @Sendable (String) async throws -> Void
+
   /// Checks if a named model is already downloaded on this system.
   var isModelDownloaded: @Sendable (String) async -> Bool = { _ in false }
 
@@ -38,6 +41,7 @@ extension TranscriptionClient: DependencyKey {
     return Self(
       transcribe: { try await live.transcribe(url: $0, model: $1, progressCallback: $2) },
       downloadModel: { try await live.downloadAndLoadModel(variant: $0, progressCallback: $1) },
+      deleteModel: { try await live.deleteModel(variant: $0) },
       isModelDownloaded: { await live.isModelDownloaded($0) },
       getRecommendedModels: { await live.getRecommendedModels() },
       getAvailableModels: { try await live.getAvailableModels() }
@@ -116,6 +120,27 @@ actor TranscriptionClientLive {
       overallProgress.completedUnitCount = Int64(fraction * 100)
       progressCallback(overallProgress)
     }
+  }
+
+  /// Deletes a model from disk if it exists
+  func deleteModel(variant: String) async throws {
+    let modelFolder = modelPath(for: variant)
+    
+    // Check if the model exists
+    guard FileManager.default.fileExists(atPath: modelFolder.path) else {
+      // Model doesn't exist, nothing to delete
+      return
+    }
+    
+    // If this is the currently loaded model, unload it first
+    if currentModelName == variant {
+      unloadCurrentModel()
+    }
+    
+    // Delete the model directory
+    try FileManager.default.removeItem(at: modelFolder)
+    
+    print("[TranscriptionClientLive] Deleted model: \(variant)")
   }
 
   /// Returns `true` if the model is already downloaded to the local folder.
