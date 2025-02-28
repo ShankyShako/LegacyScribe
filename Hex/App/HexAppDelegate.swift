@@ -62,12 +62,12 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 			backing: .buffered,
 			defer: false
 		)
-		settingsWindow.titlebarAppearsTransparent = true
 		settingsWindow.titleVisibility = .visible
 		settingsWindow.contentView = NSHostingView(rootView: settingsView)
 		settingsWindow.makeKeyAndOrderFront(nil)
 		settingsWindow.isReleasedWhenClosed = false
 		settingsWindow.center()
+        settingsWindow.toolbarStyle = NSWindow.ToolbarStyle.unified
 		NSApp.activate(ignoringOtherApps: true)
 		self.settingsWindow = settingsWindow
 	}
