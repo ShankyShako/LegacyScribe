@@ -5,6 +5,7 @@
 //  Created by Kit Langton on 1/24/25.
 //
 
+import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import Sauce
@@ -32,8 +33,18 @@ extension DependencyValues {
 }
 
 struct PasteboardClientLive {
+    @Shared(.hexSettings) var hexSettings: HexSettings
+
     @MainActor
     func paste(text: String) async {
+        if hexSettings.useClipboardPaste {
+            await pasteWithClipboard(text)
+        } else {
+            simulateTypingWithAppleScript(text)
+        }
+    }
+
+    func pasteWithClipboard(_ text: String) async {
         let pasteboard = NSPasteboard.general
         let originalContents = pasteboard.string(forType: .string)
         pasteboard.clearContents()
@@ -69,6 +80,63 @@ struct PasteboardClientLive {
         pasteboard.clearContents()
         if let originalContents {
             pasteboard.setString(originalContents, forType: .string)
+        }
+    }
+    
+    func simulateTypingWithAppleScript(_ text: String) {
+        let escapedText = text.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = NSAppleScript(source: "tell application \"System Events\" to keystroke \"\(escapedText)\"")
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+        if let error = error {
+            print("Error executing AppleScript: \(error)")
+        }
+    }
+
+    enum PasteError: Error {
+        case systemWideElementCreationFailed
+        case focusedElementNotFound
+        case elementDoesNotSupportTextEditing
+        case failedToInsertText
+    }
+    
+    static func insertTextAtCursor(_ text: String) throws {
+        // Get the system-wide accessibility element
+        let systemWideElement = AXUIElementCreateSystemWide()
+        
+        // Get the focused element
+        var focusedElementRef: CFTypeRef?
+        let axError = AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElementRef)
+        
+        guard axError == .success, let focusedElementRef = focusedElementRef else {
+            throw PasteError.focusedElementNotFound
+        }
+        
+        let focusedElement = focusedElementRef as! AXUIElement
+        
+        // Verify if the focused element supports text insertion
+        var value: CFTypeRef?
+        let supportsText = AXUIElementCopyAttributeValue(focusedElement, kAXValueAttribute as CFString, &value) == .success
+        let supportsSelectedText = AXUIElementCopyAttributeValue(focusedElement, kAXSelectedTextAttribute as CFString, &value) == .success
+        
+        if !supportsText && !supportsSelectedText {
+            throw PasteError.elementDoesNotSupportTextEditing
+        }
+        
+        // // Get any selected text
+        // var selectedText: String = ""
+        // if AXUIElementCopyAttributeValue(focusedElement, kAXSelectedTextAttribute as CFString, &value) == .success,
+        //    let selectedValue = value as? String {
+        //     selectedText = selectedValue
+        // }
+        
+        // print("selected text: \(selectedText)")
+        
+        // Insert text at cursor position by replacing selected text (or empty selection)
+        let insertResult = AXUIElementSetAttributeValue(focusedElement, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+        
+        if insertResult != .success {
+            throw PasteError.failedToInsertText
         }
     }
 }
