@@ -43,6 +43,7 @@ struct SettingsFeature {
     case keyEvent(KeyEvent)
     case toggleOpenOnLogin(Bool)
     case togglePreventSystemSleep(Bool)
+    case togglePauseMediaOnRecord(Bool)
     case checkPermissions
     case setMicrophonePermission(PermissionStatus)
     case setAccessibilityPermission(PermissionStatus)
@@ -138,6 +139,10 @@ struct SettingsFeature {
 
       case let .togglePreventSystemSleep(enabled):
         state.$hexSettings.withLock { $0.preventSystemSleep = enabled }
+        return .none
+
+      case let .togglePauseMediaOnRecord(enabled):
+        state.$hexSettings.withLock { $0.pauseMediaOnRecord = enabled }
         return .none
 
       // Permissions

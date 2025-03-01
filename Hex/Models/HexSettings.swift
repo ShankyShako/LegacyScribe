@@ -10,6 +10,7 @@ struct HexSettings: Codable, Equatable {
 	var showDockIcon: Bool = true
 	var selectedModel: String = "openai_whisper-large-v3-v20240930"
 	var preventSystemSleep: Bool = true
+	var pauseMediaOnRecord: Bool = true
 	var outputLanguage: String? = nil
 
 	// Define coding keys to match struct properties
@@ -20,6 +21,7 @@ struct HexSettings: Codable, Equatable {
 		case showDockIcon
 		case selectedModel
 		case preventSystemSleep
+		case pauseMediaOnRecord
 		case outputLanguage
 	}
 
@@ -30,6 +32,7 @@ struct HexSettings: Codable, Equatable {
 		showDockIcon: Bool = true,
 		selectedModel: String = "openai_whisper-large-v3-v20240930",
 		preventSystemSleep: Bool = true,
+		pauseMediaOnRecord: Bool = true,
 		on outputLanguage: String? = nil
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
@@ -38,6 +41,7 @@ struct HexSettings: Codable, Equatable {
 		self.showDockIcon = showDockIcon
 		self.selectedModel = selectedModel
 		self.preventSystemSleep = preventSystemSleep
+		self.pauseMediaOnRecord = pauseMediaOnRecord
 		self.outputLanguage = outputLanguage
 	}
 
@@ -58,6 +62,8 @@ struct HexSettings: Codable, Equatable {
 			?? "openai_whisper-large-v3-v20240930"
 		preventSystemSleep =
 			try container.decodeIfPresent(Bool.self, forKey: .preventSystemSleep) ?? true
+		pauseMediaOnRecord =
+			try container.decodeIfPresent(Bool.self, forKey: .pauseMediaOnRecord) ?? true
 		outputLanguage = try container.decodeIfPresent(String.self, forKey: .outputLanguage)
 	}
 }

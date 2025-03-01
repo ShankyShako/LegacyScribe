@@ -7,6 +7,7 @@
 
 import AppKit // For NSEvent media key simulation
 import AVFoundation
+import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import Foundation
@@ -117,6 +118,8 @@ actor RecordingClientLive {
   private let recordingURL = FileManager.default.temporaryDirectory.appendingPathComponent("recording.wav")
   private let (meterStream, meterContinuation) = AsyncStream<Meter>.makeStream()
   private var meterTask: Task<Void, Never>?
+    
+  @Shared(.hexSettings) var hexSettings: HexSettings
 
   /// Tracks whether media was paused when recording started.
   private var didPauseMedia: Bool = false
@@ -127,7 +130,7 @@ actor RecordingClientLive {
 
   func startRecording() async {
     // If audio is playing on the default output, pause it.
-    if await isAudioPlayingOnDefaultOutput() {
+    if await isAudioPlayingOnDefaultOutput() && hexSettings.pauseMediaOnRecord {
       print("Audio is playing on the default output; pausing it for recording.")
       await MainActor.run {
         sendMediaKey()
