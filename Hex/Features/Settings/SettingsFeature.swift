@@ -23,6 +23,7 @@ struct SettingsFeature {
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isSettingHotKey) var isSettingHotKey: Bool = false
 
+    var languages: IdentifiedArrayOf<Language> = []
     var currentModifiers: Modifiers = .init(modifiers: [])
 
     // Permissions
@@ -74,6 +75,15 @@ struct SettingsFeature {
         }
 
       case .task:
+        if let url = Bundle.main.url(forResource: "languages", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let languages = try? JSONDecoder().decode([Language].self, from: data)
+        {
+          state.languages = IdentifiedArray(uniqueElements: languages)
+        } else {
+          print("Failed to load languages")
+        }
+
         // Listen for key events (existing)
         return .run { send in
           await send(.checkPermissions)
