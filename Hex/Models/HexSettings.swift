@@ -10,6 +10,7 @@ struct HexSettings: Codable, Equatable {
 	var showDockIcon: Bool = true
 	var selectedModel: String = "openai_whisper-large-v3-v20240930"
 	var preventSystemSleep: Bool = true
+	var pauseMediaOnRecord: Bool = true
 
 	// Define coding keys to match struct properties
 	enum CodingKeys: String, CodingKey {
@@ -19,6 +20,7 @@ struct HexSettings: Codable, Equatable {
 		case showDockIcon
 		case selectedModel
 		case preventSystemSleep
+		case pauseMediaOnRecord
 	}
 
 	init(
@@ -27,7 +29,8 @@ struct HexSettings: Codable, Equatable {
 		openOnLogin: Bool = false,
 		showDockIcon: Bool = true,
 		selectedModel: String = "openai_whisper-large-v3-v20240930",
-		preventSystemSleep: Bool = true
+		preventSystemSleep: Bool = true,
+		pauseMediaOnRecord: Bool = true
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.hotkey = hotkey
@@ -35,6 +38,7 @@ struct HexSettings: Codable, Equatable {
 		self.showDockIcon = showDockIcon
 		self.selectedModel = selectedModel
 		self.preventSystemSleep = preventSystemSleep
+		self.pauseMediaOnRecord = pauseMediaOnRecord
 	}
 
 	// Custom decoder that handles missing fields
@@ -54,6 +58,8 @@ struct HexSettings: Codable, Equatable {
 			?? "openai_whisper-large-v3-v20240930"
 		preventSystemSleep =
 			try container.decodeIfPresent(Bool.self, forKey: .preventSystemSleep) ?? true
+		pauseMediaOnRecord =
+			try container.decodeIfPresent(Bool.self, forKey: .pauseMediaOnRecord) ?? true
 	}
 }
 
