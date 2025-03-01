@@ -44,9 +44,42 @@ struct PasteboardClientLive {
         }
     }
 
+    // Function to save the current state of the NSPasteboard
+    func savePasteboardState(pasteboard: NSPasteboard) -> [[String: Any]] {
+        var savedItems: [[String: Any]] = []
+        
+        for item in pasteboard.pasteboardItems ?? [] {
+            var itemDict: [String: Any] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    itemDict[type.rawValue] = data
+                }
+            }
+            savedItems.append(itemDict)
+        }
+        
+        return savedItems
+    }
+
+    // Function to restore the saved state of the NSPasteboard
+    func restorePasteboardState(pasteboard: NSPasteboard, savedItems: [[String: Any]]) {
+        pasteboard.clearContents()
+        
+        for itemDict in savedItems {
+            let item = NSPasteboardItem()
+            for (type, data) in itemDict {
+                if let data = data as? Data {
+                    item.setData(data, forType: NSPasteboard.PasteboardType(rawValue: type))
+                }
+            }
+            pasteboard.writeObjects([item])
+        }
+    }
+
+
     func pasteWithClipboard(_ text: String) async {
         let pasteboard = NSPasteboard.general
-        let originalContents = pasteboard.string(forType: .string)
+        let originalItems = savePasteboardState(pasteboard: pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
@@ -78,9 +111,7 @@ struct PasteboardClientLive {
         // Restore original pasteboard contents
         try? await Task.sleep(for: .seconds(0.1))
         pasteboard.clearContents()
-        if let originalContents {
-            pasteboard.setString(originalContents, forType: .string)
-        }
+        restorePasteboardState(pasteboard: pasteboard, savedItems: originalItems)
     }
     
     func simulateTypingWithAppleScript(_ text: String) {
