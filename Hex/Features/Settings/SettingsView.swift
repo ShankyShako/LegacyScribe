@@ -73,13 +73,16 @@ struct SettingsView: View {
 				let hotKey = store.hexSettings.hotkey
 				let key = store.isSettingHotKey ? nil : hotKey.key
 				let modifiers = store.isSettingHotKey ? store.currentModifiers : hotKey.modifiers
-
-				HotKeyView(modifiers: modifiers, key: key, isActive: store.isSettingHotKey)
-					.onTapGesture {
-						store.send(.startSettingHotKey)
-					}
-					.animation(.spring(), value: key)
-					.animation(.spring(), value: modifiers)
+				HStack{
+					Spacer()
+					HotKeyView(modifiers: modifiers, key: key, isActive: store.isSettingHotKey)
+						.animation(.spring(), value: key)
+						.animation(.spring(), value: modifiers)
+					Spacer()
+				}.contentShape(Rectangle())
+				.onTapGesture {
+					store.send(.startSettingHotKey)
+				}
 			}
 
 			// --- Sound Section ---
