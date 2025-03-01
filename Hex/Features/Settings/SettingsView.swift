@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
 	@Bindable var store: StoreOf<SettingsFeature>
+	@State var viewModel = CheckForUpdatesViewModel.shared
 
 	var body: some View {
 		Form {
@@ -134,6 +135,24 @@ struct SettingsView: View {
 				}
 			} header: {
 				Text("General")
+			}
+
+			// --- About Section ---
+			Section("About") {
+				HStack {
+					Label("Version", systemImage: "info.circle")
+					Spacer()
+					Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
+					Button("Check for Updates") {
+						viewModel.checkForUpdates()
+					}
+					.buttonStyle(.bordered)
+				}
+				HStack {
+					Label("Hex is open source", systemImage: "apple.terminal.on.rectangle")
+					Spacer()
+					Link("Visit our GitHub", destination: URL(string: "https://github.com/kitlangton/Hex/")!)
+				}
 			}
 		}
 		.formStyle(.grouped)
