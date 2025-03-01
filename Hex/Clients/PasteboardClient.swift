@@ -76,6 +76,27 @@ struct PasteboardClientLive {
         }
     }
 
+    /// Pastes current clipboard content to the frontmost application
+    static func pasteToFrontmostApp() -> Bool {
+        let script = """
+        tell application "System Events"
+            tell process (name of first application process whose frontmost is true)
+                click menu item "Paste" of menu "Edit" of menu bar item "Edit" of menu bar 1
+            end tell
+        end tell
+        """
+        
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: script) {
+            scriptObject.executeAndReturnError(&error)
+            if let error = error {
+                print("Error executing paste: \(error)")
+                return false
+            }
+            return true
+        }
+        return false
+    }
 
     func pasteWithClipboard(_ text: String) async {
         let pasteboard = NSPasteboard.general
@@ -85,28 +106,31 @@ struct PasteboardClientLive {
 
         let source = CGEventSource(stateID: .combinedSessionState)
 
-        let vKeyCode = Sauce.shared.keyCode(for: .v)
-        let cmdKeyCode: CGKeyCode = 55 // Command key
+        if !PasteboardClientLive.pasteToFrontmostApp() {
+            print("Failed to paste to frontmost app, falling back to simulated keypresses")
+            let vKeyCode = Sauce.shared.keyCode(for: .v)
+            let cmdKeyCode: CGKeyCode = 55 // Command key
 
-        // Create cmd down event
-        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: true)
+            // Create cmd down event
+            let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: true)
 
-        // Create v down event
-        let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
-        vDown?.flags = .maskCommand
+            // Create v down event
+            let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
+            vDown?.flags = .maskCommand
 
-        // Create v up event
-        let vUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
-        vUp?.flags = .maskCommand
+            // Create v up event
+            let vUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
+            vUp?.flags = .maskCommand
 
-        // Create cmd up event
-        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: false)
+            // Create cmd up event
+            let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: false)
 
-        // Post the events
-        cmdDown?.post(tap: .cghidEventTap)
-        vDown?.post(tap: .cghidEventTap)
-        vUp?.post(tap: .cghidEventTap)
-        cmdUp?.post(tap: .cghidEventTap)
+            // Post the events
+            cmdDown?.post(tap: .cghidEventTap)
+            vDown?.post(tap: .cghidEventTap)
+            vUp?.post(tap: .cghidEventTap)
+            cmdUp?.post(tap: .cghidEventTap)
+        }
 
         // Restore original pasteboard contents
         try? await Task.sleep(for: .seconds(0.1))
