@@ -11,6 +11,8 @@ struct HexSettings: Codable, Equatable {
 	var selectedModel: String = "openai_whisper-large-v3-v20240930"
 	var useClipboardPaste: Bool = true
 	var preventSystemSleep: Bool = true
+	var pauseMediaOnRecord: Bool = true
+	var outputLanguage: String? = nil
 
 	// Define coding keys to match struct properties
 	enum CodingKeys: String, CodingKey {
@@ -21,6 +23,8 @@ struct HexSettings: Codable, Equatable {
 		case selectedModel
 		case useClipboardPaste
 		case preventSystemSleep
+		case pauseMediaOnRecord
+		case outputLanguage
 	}
 
 	init(
@@ -30,7 +34,9 @@ struct HexSettings: Codable, Equatable {
 		showDockIcon: Bool = true,
 		selectedModel: String = "openai_whisper-large-v3-v20240930",
 		useClipboardPaste: Bool = true,
-		preventSystemSleep: Bool = true
+		preventSystemSleep: Bool = true,
+		pauseMediaOnRecord: Bool = true,
+		on outputLanguage: String? = nil
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.hotkey = hotkey
@@ -39,6 +45,8 @@ struct HexSettings: Codable, Equatable {
 		self.selectedModel = selectedModel
 		self.useClipboardPaste = useClipboardPaste
 		self.preventSystemSleep = preventSystemSleep
+		self.pauseMediaOnRecord = pauseMediaOnRecord
+		self.outputLanguage = outputLanguage
 	}
 
 	// Custom decoder that handles missing fields
@@ -59,6 +67,9 @@ struct HexSettings: Codable, Equatable {
 		useClipboardPaste = try container.decodeIfPresent(Bool.self, forKey: .useClipboardPaste) ?? true
 		preventSystemSleep =
 			try container.decodeIfPresent(Bool.self, forKey: .preventSystemSleep) ?? true
+		pauseMediaOnRecord =
+			try container.decodeIfPresent(Bool.self, forKey: .pauseMediaOnRecord) ?? true
+		outputLanguage = try container.decodeIfPresent(String.self, forKey: .outputLanguage)
 	}
 }
 

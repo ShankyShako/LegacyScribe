@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
 	@Bindable var store: StoreOf<SettingsFeature>
 	@State var isInfoPopTipShown: Bool = false
+	@State var viewModel = CheckForUpdatesViewModel.shared
 
 	var body: some View {
 		Form {
@@ -69,18 +70,32 @@ struct SettingsView: View {
 				)
 			}
 
+			Label {
+				Picker("Output Language", selection: $store.hexSettings.outputLanguage) {
+					ForEach(store.languages, id: \.id) { language in
+						Text(language.name).tag(language.code)
+					}
+				}
+				.pickerStyle(.menu)
+			} icon: {
+				Image(systemName: "globe")
+			}
+
 			// --- Hot Key Section ---
 			Section("Hot Key") {
 				let hotKey = store.hexSettings.hotkey
 				let key = store.isSettingHotKey ? nil : hotKey.key
 				let modifiers = store.isSettingHotKey ? store.currentModifiers : hotKey.modifiers
-
-				HotKeyView(modifiers: modifiers, key: key, isActive: store.isSettingHotKey)
-					.onTapGesture {
-						store.send(.startSettingHotKey)
-					}
-					.animation(.spring(), value: key)
-					.animation(.spring(), value: modifiers)
+				HStack{
+					Spacer()
+					HotKeyView(modifiers: modifiers, key: key, isActive: store.isSettingHotKey)
+						.animation(.spring(), value: key)
+						.animation(.spring(), value: modifiers)
+					Spacer()
+				}.contentShape(Rectangle())
+				.onTapGesture {
+					store.send(.startSettingHotKey)
+				}
 			}
 
 			// --- Sound Section ---
@@ -129,8 +144,37 @@ struct SettingsView: View {
 				} icon: {
 					Image(systemName: "zzz")
 				}
+                
+                Label {
+                    Toggle(
+                        "Pause Media while Recording",
+                        isOn: Binding(
+                            get: { store.hexSettings.pauseMediaOnRecord },
+                            set: { store.send(.togglePauseMediaOnRecord($0)) }
+                        ))
+                } icon: {
+                    Image(systemName: "pause")
+                }
 			} header: {
 				Text("General")
+			}
+
+			// --- About Section ---
+			Section("About") {
+				HStack {
+					Label("Version", systemImage: "info.circle")
+					Spacer()
+					Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
+					Button("Check for Updates") {
+						viewModel.checkForUpdates()
+					}
+					.buttonStyle(.bordered)
+				}
+				HStack {
+					Label("Hex is open source", systemImage: "apple.terminal.on.rectangle")
+					Spacer()
+					Link("Visit our GitHub", destination: URL(string: "https://github.com/kitlangton/Hex/")!)
+				}
 			}
 		}
 		.formStyle(.grouped)

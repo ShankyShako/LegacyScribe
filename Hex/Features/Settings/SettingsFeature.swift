@@ -23,6 +23,7 @@ struct SettingsFeature {
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isSettingHotKey) var isSettingHotKey: Bool = false
 
+    var languages: IdentifiedArrayOf<Language> = []
     var currentModifiers: Modifiers = .init(modifiers: [])
 
     // Permissions
@@ -42,6 +43,7 @@ struct SettingsFeature {
     case keyEvent(KeyEvent)
     case toggleOpenOnLogin(Bool)
     case togglePreventSystemSleep(Bool)
+    case togglePauseMediaOnRecord(Bool)
     case checkPermissions
     case setMicrophonePermission(PermissionStatus)
     case setAccessibilityPermission(PermissionStatus)
@@ -74,6 +76,15 @@ struct SettingsFeature {
         }
 
       case .task:
+        if let url = Bundle.main.url(forResource: "languages", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let languages = try? JSONDecoder().decode([Language].self, from: data)
+        {
+          state.languages = IdentifiedArray(uniqueElements: languages)
+        } else {
+          print("Failed to load languages")
+        }
+
         // Listen for key events (existing)
         return .run { send in
           await send(.checkPermissions)
@@ -128,6 +139,10 @@ struct SettingsFeature {
 
       case let .togglePreventSystemSleep(enabled):
         state.$hexSettings.withLock { $0.preventSystemSleep = enabled }
+        return .none
+
+      case let .togglePauseMediaOnRecord(enabled):
+        state.$hexSettings.withLock { $0.pauseMediaOnRecord = enabled }
         return .none
 
       // Permissions

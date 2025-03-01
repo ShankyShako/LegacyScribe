@@ -17,7 +17,7 @@ import WhisperKit
 struct TranscriptionClient {
   /// Transcribes an audio file at the specified `URL` using the named `model`.
   /// Reports transcription progress via `progressCallback`.
-  var transcribe: @Sendable (URL, String, @escaping (Progress) -> Void) async throws -> String
+  var transcribe: @Sendable (URL, String, DecodingOptions, @escaping (Progress) -> Void) async throws -> String
 
   /// Ensures a model is downloaded (if missing) and loaded into memory, reporting progress via `progressCallback`.
   var downloadModel: @Sendable (String, @escaping (Progress) -> Void) async throws -> Void
@@ -39,7 +39,7 @@ extension TranscriptionClient: DependencyKey {
   static var liveValue: Self {
     let live = TranscriptionClientLive()
     return Self(
-      transcribe: { try await live.transcribe(url: $0, model: $1, progressCallback: $2) },
+      transcribe: { try await live.transcribe(url: $0, model: $1, options: $2, progressCallback: $3) },
       downloadModel: { try await live.downloadAndLoadModel(variant: $0, progressCallback: $1) },
       deleteModel: { try await live.deleteModel(variant: $0) },
       isModelDownloaded: { await live.isModelDownloaded($0) },
@@ -164,6 +164,7 @@ actor TranscriptionClientLive {
   func transcribe(
     url: URL,
     model: String,
+    options: DecodingOptions,
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
     // Load or switch to the required model if needed.
@@ -185,14 +186,8 @@ actor TranscriptionClientLive {
       )
     }
 
-    let decodeOptions = DecodingOptions(
-      language: nil, // TODO: Allow the user to set ther preferred language in Settings
-      detectLanguage: true,
-      chunkingStrategy: .vad
-    )
-
     // Perform the transcription.
-    let results = try await whisperKit.transcribe(audioPath: url.path, decodeOptions: decodeOptions)
+    let results = try await whisperKit.transcribe(audioPath: url.path, decodeOptions: options)
 
     // Concatenate results from all segments.
     let text = results.map(\.text).joined(separator: " ")

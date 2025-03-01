@@ -28,6 +28,32 @@ extension SharedReaderKey
 	}
 }
 
+class AudioPlayerController: NSObject, AVAudioPlayerDelegate {
+	private var player: AVAudioPlayer?
+	var onPlaybackFinished: (() -> Void)?
+
+	func play(url: URL) throws -> AVAudioPlayer {
+		let player = try AVAudioPlayer(contentsOf: url)
+		player.delegate = self
+		player.play()
+		self.player = player
+		return player
+	}
+
+	func stop() {
+		player?.stop()
+		player = nil
+	}
+
+	// AVAudioPlayerDelegate method
+	func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+		self.player = nil
+		Task { @MainActor in
+			onPlaybackFinished?()
+		}
+	}
+}
+
 // MARK: - History Feature
 
 @Reducer
@@ -37,6 +63,7 @@ struct HistoryFeature {
 		@Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
 		var playingTranscriptID: UUID?
 		var audioPlayer: AVAudioPlayer?
+		var audioPlayerController: AudioPlayerController?
 	}
 
 	enum Action {
@@ -46,6 +73,7 @@ struct HistoryFeature {
 		case deleteTranscript(UUID)
 		case deleteAllTranscripts
 		case confirmDeleteAll
+		case playbackFinished
 	}
 
 	@Dependency(\.pasteboard) var pasteboard
@@ -56,15 +84,17 @@ struct HistoryFeature {
 			case let .playTranscript(id):
 				if state.playingTranscriptID == id {
 					// Stop playback if tapping the same transcript
-					state.audioPlayer?.stop()
+					state.audioPlayerController?.stop()
 					state.audioPlayer = nil
+					state.audioPlayerController = nil
 					state.playingTranscriptID = nil
 					return .none
 				}
 
 				// Stop any existing playback
-				state.audioPlayer?.stop()
+				state.audioPlayerController?.stop()
 				state.audioPlayer = nil
+				state.audioPlayerController = nil
 
 				// Find the transcript and play its audio
 				guard let transcript = state.transcriptionHistory.history.first(where: { $0.id == id }) else {
@@ -72,18 +102,35 @@ struct HistoryFeature {
 				}
 
 				do {
-					let player = try AVAudioPlayer(contentsOf: transcript.audioPath)
-					player.play()
+					let controller = AudioPlayerController()
+					let player = try controller.play(url: transcript.audioPath)
+
 					state.audioPlayer = player
+					state.audioPlayerController = controller
 					state.playingTranscriptID = id
+
+					return .run { send in
+						// Using non-throwing continuation since we don't need to throw errors
+						await withCheckedContinuation { continuation in
+							controller.onPlaybackFinished = {
+								continuation.resume()
+
+								// Use Task to switch to MainActor for sending the action
+								Task { @MainActor in
+									send(.playbackFinished)
+								}
+							}
+						}
+					}
 				} catch {
 					print("Error playing audio: \(error)")
+					return .none
 				}
-				return .none
 
-			case .stopPlayback:
-				state.audioPlayer?.stop()
+			case .stopPlayback, .playbackFinished:
+				state.audioPlayerController?.stop()
 				state.audioPlayer = nil
+				state.audioPlayerController = nil
 				state.playingTranscriptID = nil
 				return .none
 
@@ -100,6 +147,13 @@ struct HistoryFeature {
 
 				let transcript = state.transcriptionHistory.history[index]
 
+				if state.playingTranscriptID == id {
+					state.audioPlayerController?.stop()
+					state.audioPlayer = nil
+					state.audioPlayerController = nil
+					state.playingTranscriptID = nil
+				}
+
 				_ = state.$transcriptionHistory.withLock { history in
 					history.history.remove(at: index)
 				}
@@ -113,6 +167,11 @@ struct HistoryFeature {
 
 			case .confirmDeleteAll:
 				let transcripts = state.transcriptionHistory.history
+
+				state.audioPlayerController?.stop()
+				state.audioPlayer = nil
+				state.audioPlayerController = nil
+				state.playingTranscriptID = nil
 
 				state.$transcriptionHistory.withLock { history in
 					history.history.removeAll()
