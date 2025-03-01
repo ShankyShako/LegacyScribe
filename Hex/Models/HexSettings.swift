@@ -9,6 +9,7 @@ struct HexSettings: Codable, Equatable {
 	var openOnLogin: Bool = false
 	var showDockIcon: Bool = true
 	var selectedModel: String = "openai_whisper-large-v3-v20240930"
+	var useClipboardPaste: Bool = true
 	var preventSystemSleep: Bool = true
 	var pauseMediaOnRecord: Bool = true
 	var outputLanguage: String? = nil
@@ -20,6 +21,7 @@ struct HexSettings: Codable, Equatable {
 		case openOnLogin
 		case showDockIcon
 		case selectedModel
+		case useClipboardPaste
 		case preventSystemSleep
 		case pauseMediaOnRecord
 		case outputLanguage
@@ -31,6 +33,7 @@ struct HexSettings: Codable, Equatable {
 		openOnLogin: Bool = false,
 		showDockIcon: Bool = true,
 		selectedModel: String = "openai_whisper-large-v3-v20240930",
+		useClipboardPaste: Bool = true,
 		preventSystemSleep: Bool = true,
 		pauseMediaOnRecord: Bool = true,
 		on outputLanguage: String? = nil
@@ -40,6 +43,7 @@ struct HexSettings: Codable, Equatable {
 		self.openOnLogin = openOnLogin
 		self.showDockIcon = showDockIcon
 		self.selectedModel = selectedModel
+		self.useClipboardPaste = useClipboardPaste
 		self.preventSystemSleep = preventSystemSleep
 		self.pauseMediaOnRecord = pauseMediaOnRecord
 		self.outputLanguage = outputLanguage
@@ -60,6 +64,7 @@ struct HexSettings: Codable, Equatable {
 		selectedModel =
 			try container.decodeIfPresent(String.self, forKey: .selectedModel)
 			?? "openai_whisper-large-v3-v20240930"
+		useClipboardPaste = try container.decodeIfPresent(Bool.self, forKey: .useClipboardPaste) ?? true
 		preventSystemSleep =
 			try container.decodeIfPresent(Bool.self, forKey: .preventSystemSleep) ?? true
 		pauseMediaOnRecord =

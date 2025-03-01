@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
 	@Bindable var store: StoreOf<SettingsFeature>
+	@State var isInfoPopTipShown: Bool = false
 	@State var viewModel = CheckForUpdatesViewModel.shared
 
 	var body: some View {
@@ -124,6 +125,13 @@ struct SettingsView: View {
 					Toggle("Show Dock Icon", isOn: $store.hexSettings.showDockIcon)
 				} icon: {
 					Image(systemName: "dock.rectangle")
+				}
+
+				Label {
+					Toggle("Use clipboard to insert", isOn: $store.hexSettings.useClipboardPaste)
+					Text("Use clipboard to insert text. Fast but may not restore all clipboard content.\nTurn off to use simulated keypresses. Slower, but doesn't need to restore clipboard")
+				} icon: {
+					Image(systemName: "doc.on.doc.fill")
 				}
 
 				Label {
