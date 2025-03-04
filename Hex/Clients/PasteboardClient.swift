@@ -81,28 +81,41 @@ struct PasteboardClientLive {
         let script = """
         tell application "System Events"
             tell process (name of first application process whose frontmost is true)
-                -- Open the "Edit" menu
-                click menu item "Paste" of menu bar item "Edit" of menu bar 1
-                
-                -- Check if the "Paste" menu item exits
-                if exists menu item "Paste" of menu item "Paste" of menu 1 of menu bar item "Edit" of menu bar 1 then
-                    click menu item "Paste" of menu item "Paste" of menu 1 of menu bar item "Edit" of menu bar 1
-                else
-                    -- If not, click the "Paste" menu item directly
-                    click menu item "Paste" of menu 1 of menu bar item "Edit" of menu bar 1
-                end if
+                tell (menu item "Paste" of menu of menu item "Paste" of menu "Edit" of menu bar item "Edit" of menu bar 1)
+                    if exists then
+                        log (get properties of it)
+                        if enabled then
+                            click it
+                            return true
+                        else
+                            return false
+                        end if
+                    end if
+                end tell
+                tell (menu item "Paste" of menu "Edit" of menu bar item "Edit" of menu bar 1)
+                    if exists then
+                        if enabled then
+                            click it
+                            return true
+                        else
+                            return false
+                        end if
+                    else
+                        return false
+                    end if
+                end tell
             end tell
         end tell
         """
         
         var error: NSDictionary?
         if let scriptObject = NSAppleScript(source: script) {
-            scriptObject.executeAndReturnError(&error)
+            let result = scriptObject.executeAndReturnError(&error)
             if let error = error {
                 print("Error executing paste: \(error)")
                 return false
             }
-            return true
+            return result.booleanValue
         }
         return false
     }
