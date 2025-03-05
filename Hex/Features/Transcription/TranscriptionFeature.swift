@@ -249,11 +249,12 @@ private extension TranscriptionFeature {
 
     let durationIsLongEnough: Bool = {
       guard let startTime = state.recordingStartTime else { return false }
-      return Date().timeIntervalSince(startTime) > 0.2
+      return Date().timeIntervalSince(startTime) > state.hexSettings.minimumKeyTime
     }()
 
     guard durationIsLongEnough else {
-      // If the user recorded for less than 0.2s, just discard
+      // If the user recorded for less than minimumKeyTime, just discard
+      print("Recording was too short, discarding")
       return .run { _ in
         _ = await recording.stopRecording()
       }

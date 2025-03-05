@@ -12,6 +12,7 @@ struct HexSettings: Codable, Equatable {
 	var useClipboardPaste: Bool = true
 	var preventSystemSleep: Bool = true
 	var pauseMediaOnRecord: Bool = true
+	var minimumKeyTime: Double = 0.2
 	var outputLanguage: String? = nil
 
 	// Define coding keys to match struct properties
@@ -24,6 +25,7 @@ struct HexSettings: Codable, Equatable {
 		case useClipboardPaste
 		case preventSystemSleep
 		case pauseMediaOnRecord
+		case minimumKeyTime
 		case outputLanguage
 	}
 
@@ -36,6 +38,7 @@ struct HexSettings: Codable, Equatable {
 		useClipboardPaste: Bool = true,
 		preventSystemSleep: Bool = true,
 		pauseMediaOnRecord: Bool = true,
+		minimumKeyTime: Double = 0.2,
 		on outputLanguage: String? = nil
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
@@ -46,6 +49,7 @@ struct HexSettings: Codable, Equatable {
 		self.useClipboardPaste = useClipboardPaste
 		self.preventSystemSleep = preventSystemSleep
 		self.pauseMediaOnRecord = pauseMediaOnRecord
+		self.minimumKeyTime = minimumKeyTime
 		self.outputLanguage = outputLanguage
 	}
 
@@ -69,6 +73,8 @@ struct HexSettings: Codable, Equatable {
 			try container.decodeIfPresent(Bool.self, forKey: .preventSystemSleep) ?? true
 		pauseMediaOnRecord =
 			try container.decodeIfPresent(Bool.self, forKey: .pauseMediaOnRecord) ?? true
+		minimumKeyTime =
+			try container.decodeIfPresent(Double.self, forKey: .minimumKeyTime) ?? 0.2
 		outputLanguage = try container.decodeIfPresent(String.self, forKey: .outputLanguage)
 	}
 }

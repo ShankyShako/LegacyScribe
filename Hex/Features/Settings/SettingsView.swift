@@ -96,6 +96,13 @@ struct SettingsView: View {
 				.onTapGesture {
 					store.send(.startSettingHotKey)
 				}
+				Label {
+					Slider(value: $store.hexSettings.minimumKeyTime, in: 0.0...2.0, step: 0.1) {
+						Text("Ignore below \(store.hexSettings.minimumKeyTime, specifier: "%.1f")s")
+					}
+				} icon: {
+					Image(systemName: "clock")
+				}
 			}
 
 			// --- Sound Section ---
