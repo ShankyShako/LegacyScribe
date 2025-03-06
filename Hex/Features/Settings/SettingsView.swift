@@ -3,8 +3,8 @@ import SwiftUI
 
 struct SettingsView: View {
 	@Bindable var store: StoreOf<SettingsFeature>
-	@State var isInfoPopTipShown: Bool = false
 	@State var viewModel = CheckForUpdatesViewModel.shared
+	@State private var showingChangelog = false
 
 	var body: some View {
 		Form {
@@ -178,6 +178,19 @@ struct SettingsView: View {
 						viewModel.checkForUpdates()
 					}
 					.buttonStyle(.bordered)
+				}
+				HStack {
+					Label("Changelog", systemImage: "doc.text")
+					Spacer()
+					Button("Show Changelog") {
+						showingChangelog.toggle()
+					}
+					.buttonStyle(.bordered)
+					.sheet(isPresented: $showingChangelog, onDismiss: {
+						showingChangelog = false
+					}) {
+						ChangelogView()
+					}
 				}
 				HStack {
 					Label("Hex is open source", systemImage: "apple.terminal.on.rectangle")

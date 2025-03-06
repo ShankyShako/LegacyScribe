@@ -49,3 +49,12 @@ Hex is organized into several directories, each serving a specific purpose:
     - Stores user preferences like hotkey settings and sound preferences.
   - `HotKey.swift`
     - Represents the hotkey configuration.
+
+- **`Resources/`**
+  - Contains the app's assets, including the app icon and sound effects.
+  - `changelog.md`
+    - A log of changes to the app.
+  - `Data/languages.json`
+    - A list of supported languages for transcription.
+  - `Audio/`
+    - Sound effects for user feedback.
