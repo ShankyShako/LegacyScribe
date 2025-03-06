@@ -252,8 +252,9 @@ private extension TranscriptionFeature {
       return Date().timeIntervalSince(startTime) > state.hexSettings.minimumKeyTime
     }()
 
-    guard durationIsLongEnough else {
+      guard (durationIsLongEnough && state.hexSettings.hotkey.key == nil) else {
       // If the user recorded for less than minimumKeyTime, just discard
+      // unless the hotkey includes a regular key, in which case, we can assume it was intentional
       print("Recording was too short, discarding")
       return .run { _ in
         _ = await recording.stopRecording()
