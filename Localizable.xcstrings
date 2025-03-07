@@ -51,6 +51,26 @@
         }
       }
     },
+    "Changelog" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Änderungen"
+          }
+        }
+      }
+    },
+    "Changelog could not be loaded." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Änderungen konnten nicht geladen werden."
+          }
+        }
+      }
+    },
     "Check for Updates" : {
       "comment" : "Check for updates button in About section of Settings",
       "localizations" : {
@@ -69,6 +89,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Suche nach Updates…"
+          }
+        }
+      }
+    },
+    "Close" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schließen"
           }
         }
       }
@@ -388,6 +418,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Einstellungen…"
+          }
+        }
+      }
+    },
+    "Show Changelog" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Änderungen anzeigen"
           }
         }
       }
