@@ -19,3 +19,6 @@ ExportOptions.plist
 
 # Claude
 .claude/
+
+# Machine-local signing (see Local.xcconfig.example)
+Local.xcconfig

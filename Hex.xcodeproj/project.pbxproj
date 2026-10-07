@@ -48,6 +48,7 @@
 		47E05DEE2D444EC600D26DA6 /* LegacyScribe Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "LegacyScribe Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B53355FF2D7B8D4900E5F542 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		B5A1C7E22E6A1C5B00AB1234 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.icon; name = AppIcon.icon; path = Hex/AppIcon.icon; sourceTree = "<group>"; };
+		5C1A9E0B2F3B000100000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -128,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				B53355FF2D7B8D4900E5F542 /* Localizable.xcstrings */,
+				5C1A9E0B2F3B000100000001 /* Signing.xcconfig */,
 				B5A1C7E22E6A1C5B00AB1234 /* AppIcon.icon */,
 				47E05DF02D444EC600D26DA6 /* Hex */,
 				4F0D6A032F1A000100000001 /* HexTests */,
@@ -348,6 +350,7 @@
 		};
 		47E05DFB2D444EC700D26DA6 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C1A9E0B2F3B000100000001 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -413,6 +416,7 @@
 		};
 		47E05DFC2D444EC700D26DA6 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C1A9E0B2F3B000100000001 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -475,7 +479,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = Hex/Hex.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "$(LS_CODE_SIGN_IDENTITY)";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;
@@ -527,7 +531,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = Hex/Hex.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "$(LS_CODE_SIGN_IDENTITY)";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;

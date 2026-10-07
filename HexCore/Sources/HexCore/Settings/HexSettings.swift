@@ -17,8 +17,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		.init(pattern: "hm+")
 	]
 
-	/// OmniRoute (an OpenAI-compatible router) at its default port on this Mac.
-	/// Groq's gpt-oss-120b rewrote a dictation in 0.6–1.0 s (2026-10-06); Gemini Flash took 2–30 s.
+	/// An OpenAI-compatible router (OmniRoute's default port) on this Mac; point it at your own
+	/// host in Settings. Groq's gpt-oss-120b rewrote a dictation in 0.6–1.0 s (2026-10-06);
+	/// Gemini Flash took 2–30 s.
 	public static let defaultRewritePrimary = RewriteEndpoint(
 		baseURL: "http://localhost:20128/v1",
 		model: "groq/openai/gpt-oss-120b",

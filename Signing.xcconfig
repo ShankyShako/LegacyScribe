@@ -1,0 +1,6 @@
+// Code signing for the project. Machine-specific values go in Local.xcconfig (gitignored);
+// copy Local.xcconfig.example to start. Without it the app is signed ad hoc ("-"): it runs,
+// but macOS treats every rebuild as a new app and asks for mic/Accessibility again.
+DEVELOPMENT_TEAM =
+LS_CODE_SIGN_IDENTITY = -
+#include? "Local.xcconfig"
