@@ -26,6 +26,7 @@ Before writing an STT engine adapter, read `docs/research/engines.md` (verified 
 | Default primary: OmniRoute on CONFORMANT, `groq/openai/gpt-oss-120b`, reasoning `low`, 5 s. Default fallback: local Ollama `qwen3:8b`, reasoning `none`, 10 s | Measured 2026-10-06: Groq 0.6–1.0 s with the best structure; Ollama 0.7–2.6 s warm, ~4.5 s cold; Gemini Flash 2–30 s and truncates when it spends tokens on reasoning |
 | A `finish_reason: length` answer is a failure, and a rewrite over 4× the dictation + 400 chars is rejected | A cut-off rewrite or a model answering the dictation instead of rewriting it must not be pasted |
 | API keys in the Keychain (service `com.genovamongalo.LegacyScribe.rewrite`, account `apiKey.<role>`), never in `hex_settings.json` | Settings JSON is plain text |
+| Cohere Transcribe 4-bit is an app engine (`CohereClient`, mlx-audio-swift @ `dbe5eaac964e`), listed first as "most accurate (English)"; fresh installs still default to Parakeet v3 | Best WER on the user's voice (5.3% vs 8–9%) at ~320 ms per 10 s. Parakeet stays the default because Cohere is a 1.4 GB download and keeps ~2 GB resident |
 
 ## Layout and naming
 

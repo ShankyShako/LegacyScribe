@@ -25,6 +25,8 @@
 		4F0D6A0E2F1A000100000001 /* CasePaths in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0C2F1A000100000001 /* CasePaths */; };
 		4F0D6A0F2F1A000100000001 /* Dependencies in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E092D44525B00D26DA6 /* Dependencies */; };
 		4F0D6A102F1A000100000001 /* IdentifiedCollections in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0D2F1A000100000001 /* IdentifiedCollections */; };
+		5A1D10042F1B000100000001 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = 5A1D10022F1B000100000001 /* MLXAudioSTT */; };
+		5A1D10052F1B000100000001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5A1D10032F1B000100000001 /* MLXAudioCore */; };
 		B5045C972D78DED500D0A119 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = B5045C962D78DED500D0A119 /* MarkdownUI */; };
 		B53356002D7B8D4900E5F542 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B53355FF2D7B8D4900E5F542 /* Localizable.xcstrings */; };
 /* End PBXBuildFile section */
@@ -98,6 +100,8 @@
 				47512ABF2E14D8C9000E25BA /* WhisperKit in Frameworks */,
 				47E05E052D444EF800D26DA6 /* Sauce in Frameworks */,
 				47E16A622EC6C9D300885CF7 /* FluidAudio in Frameworks */,
+				5A1D10042F1B000100000001 /* MLXAudioSTT in Frameworks */,
+				5A1D10052F1B000100000001 /* MLXAudioCore in Frameworks */,
 				47C08AB62DE9F61B00564AE6 /* Inject in Frameworks */,
 				4765045E2D45900200C7EA60 /* Pow in Frameworks */,
 				47E05E0C2D44525B00D26DA6 /* DependenciesMacros in Frameworks */,
@@ -200,6 +204,8 @@
 				47512ABE2E14D8C9000E25BA /* WhisperKit */,
 				476316262E5FB31400913CDE /* HexCore */,
 				47E16A612EC6C9D300885CF7 /* FluidAudio */,
+				5A1D10022F1B000100000001 /* MLXAudioSTT */,
+				5A1D10032F1B000100000001 /* MLXAudioCore */,
 				4F0D6A072F1A000100000001 /* Sharing */,
 				4F0D6A0C2F1A000100000001 /* CasePaths */,
 				4F0D6A0D2F1A000100000001 /* IdentifiedCollections */,
@@ -246,6 +252,7 @@
 				47512ABD2E14D8C9000E25BA /* XCRemoteSwiftPackageReference "WhisperKit" */,
 				476316252E5FB31400913CDE /* XCLocalSwiftPackageReference "HexCore" */,
 				47E16A602EC6C9D300885CF7 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				5A1D10012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
 				4F0D6A062F1A000100000001 /* XCRemoteSwiftPackageReference "swift-sharing" */,
 				4F0D6A0A2F1A000100000001 /* XCRemoteSwiftPackageReference "swift-case-paths" */,
 				4F0D6A0B2F1A000100000001 /* XCRemoteSwiftPackageReference "swift-identified-collections" */,
@@ -684,6 +691,14 @@
 				minimumVersion = 1.1.1;
 			};
 		};
+		5A1D10012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift";
+			requirement = {
+				kind = revision;
+				revision = dbe5eaac964e8257785f9d015c81f819a38016a8;
+			};
+		};
 		B5045C952D78DED500D0A119 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
@@ -753,6 +768,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4F0D6A0B2F1A000100000001 /* XCRemoteSwiftPackageReference "swift-identified-collections" */;
 			productName = IdentifiedCollections;
+		};
+		5A1D10022F1B000100000001 /* MLXAudioSTT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A1D10012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioSTT;
+		};
+		5A1D10032F1B000100000001 /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A1D10012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
 		};
 		B5045C962D78DED500D0A119 /* MarkdownUI */ = {
 			isa = XCSwiftPackageProductDependency;

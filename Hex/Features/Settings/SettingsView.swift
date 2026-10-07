@@ -24,8 +24,9 @@ struct SettingsView: View {
 			}
 
 			ModelSectionView(store: store, shouldFlash: store.shouldFlashModelSection)
-			// Only show language picker for WhisperKit models (not Parakeet)
-			if ParakeetModel(rawValue: store.hexSettings.selectedModel) == nil {
+			// Only WhisperKit models take a language; Parakeet detects it and Cohere is English-only here.
+			if ParakeetModel(rawValue: store.hexSettings.selectedModel) == nil,
+			   CohereModel(rawValue: store.hexSettings.selectedModel) == nil {
 				LanguageSectionView(store: store)
 			}
 

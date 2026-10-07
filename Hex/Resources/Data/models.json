@@ -1,5 +1,13 @@
 [
   {
+    "displayName": "Cohere Transcribe (4-bit)",
+    "internalName": "cohere-transcribe-03-2026-mlx-4bit",
+    "size": "English",
+    "accuracyStars": 5,
+    "speedStars": 4,
+    "storageSize": "1.4GB"
+  },
+  {
     "displayName": "Parakeet TDT v2",
     "internalName": "parakeet-tdt-0.6b-v2-coreml",
     "size": "English",

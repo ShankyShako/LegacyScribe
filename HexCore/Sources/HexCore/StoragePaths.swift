@@ -46,6 +46,15 @@ public extension URL {
 			return dir
 		}
 	}
+
+	/// Root for MLX checkpoints, laid out as `<root>/<hf-owner>/<hf-repo>` (shared with `tools/lsbench`).
+	static var hexMLXModelsDirectory: URL {
+		get throws {
+			let dir = try hexApplicationSupport.appendingPathComponent("Models/mlx", isDirectory: true)
+			try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+			return dir
+		}
+	}
 }
 
 public extension FileManager {

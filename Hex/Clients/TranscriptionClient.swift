@@ -73,6 +73,7 @@ actor TranscriptionClientLive {
   /// The name of the currently loaded model, if any.
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
+  private var cohere = CohereClient()
 
   /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
   private lazy var modelsBaseFolder: URL = {
@@ -88,6 +89,11 @@ actor TranscriptionClientLive {
   /// Ensures the given `variant` model is downloaded and loaded, reporting
   /// overall progress (0%–50% for downloading, 50%–100% for loading).
   func downloadAndLoadModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
+    if isCohere(variant) {
+      try await cohere.ensureLoaded(modelName: variant, progress: progressCallback)
+      currentModelName = variant
+      return
+    }
     // If Parakeet, use Parakeet client path
     if isParakeet(variant) {
       try await parakeet.ensureLoaded(modelName: variant, progress: progressCallback)
@@ -140,6 +146,11 @@ actor TranscriptionClientLive {
 
   /// Deletes a model from disk if it exists
   func deleteModel(variant: String) async throws {
+    if isCohere(variant) {
+      try await cohere.deleteCaches(modelName: variant)
+      if currentModelName == variant { currentModelName = nil }
+      return
+    }
     if isParakeet(variant) {
       try await parakeet.deleteCaches(modelName: variant)
       if currentModelName == variant { unloadCurrentModel() }
@@ -167,6 +178,9 @@ actor TranscriptionClientLive {
   /// Returns `true` if the model is already downloaded to the local folder.
   /// Performs a thorough check to ensure the model files are actually present and usable.
   func isModelDownloaded(_ modelName: String) async -> Bool {
+    if isCohere(modelName) {
+      return await cohere.isModelAvailable(modelName)
+    }
     if isParakeet(modelName) {
       let available = await parakeet.isModelAvailable(modelName)
       parakeetLogger.debug("Parakeet available? \(available)")
@@ -215,6 +229,9 @@ actor TranscriptionClientLive {
       if !names.contains(model.identifier) { names.insert(model.identifier, at: 0) }
     }
     #endif
+    for model in CohereModel.allCases.reversed() where !names.contains(model.identifier) {
+      names.insert(model.identifier, at: 0)
+    }
     return names
   }
 
@@ -228,6 +245,13 @@ actor TranscriptionClientLive {
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
     let startAll = Date()
+    if isCohere(model) {
+      try await downloadAndLoadModel(variant: model, progressCallback: progressCallback)
+      let startTx = Date()
+      let text = try await cohere.transcribe(url)
+      transcriptionLogger.info("Cohere transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
+      return text
+    }
     if isParakeet(model) {
       transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
       let startLoad = Date()
@@ -295,6 +319,10 @@ actor TranscriptionClientLive {
     }
 
     return ModelPatternMatcher.resolvePattern(variant, from: models) ?? variant
+  }
+
+  private func isCohere(_ name: String) -> Bool {
+    CohereModel(rawValue: name) != nil
   }
 
   private func isParakeet(_ name: String) -> Bool {

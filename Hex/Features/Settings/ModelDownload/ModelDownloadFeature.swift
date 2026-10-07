@@ -37,6 +37,9 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 	public var id: String { internalName }
 
 	public var badge: String? {
+		if CohereModel(rawValue: internalName) != nil {
+			return "MOST ACCURATE (ENGLISH)"
+		}
 		switch parakeetModel {
 		case .englishV2:
 			return "BEST FOR ENGLISH"
@@ -301,6 +304,9 @@ public struct ModelDownloadFeature {
 					availablePlus.insert(ModelInfo(name: model.identifier, isDownloaded: false), at: 0)
 				}
 			}
+			for model in CohereModel.allCases.reversed() where !availablePlus.contains(where: { $0.name == model.identifier }) {
+				availablePlus.insert(ModelInfo(name: model.identifier, isDownloaded: false), at: 0)
+			}
 
 			if availablePlus.contains(where: { $0.name == state.preferredParakeetIdentifier }) {
 				state.recommendedModel = state.preferredParakeetIdentifier
@@ -502,8 +508,11 @@ public struct ModelDownloadFeature {
 		// don't end up staring at an empty WhisperKit folder thinking the
 		// Parakeet download silently failed.
 		let usesParakeetRoot = ParakeetModel(rawValue: model) != nil
+		let usesMLXRoot = CohereModel(rawValue: model) != nil
 		return .run { _ in
-			let base = try usesParakeetRoot
+			let base = try usesMLXRoot
+				? URL.hexMLXModelsDirectory
+				: usesParakeetRoot
 				? URL.hexParakeetModelsDirectory
 				: URL.hexModelsDirectory
 			NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: base.path)
