@@ -17,6 +17,22 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		.init(pattern: "hm+")
 	]
 
+	/// OmniRoute (an OpenAI-compatible router) at its default port on this Mac.
+	/// Groq's gpt-oss-120b rewrote a dictation in 0.6–1.0 s (2026-10-06); Gemini Flash took 2–30 s.
+	public static let defaultRewritePrimary = RewriteEndpoint(
+		baseURL: "http://localhost:20128/v1",
+		model: "groq/openai/gpt-oss-120b",
+		reasoningEffort: "low",
+		timeout: 5
+	)
+	/// Local Ollama: 0.7–2.6 s warm, ~4.5 s when the model has to load first.
+	public static let defaultRewriteFallback = RewriteEndpoint(
+		baseURL: "http://localhost:11434/v1",
+		model: "qwen3:8b",
+		reasoningEffort: "none",
+		timeout: 10
+	)
+
 	public static var defaultPasteLastTranscriptHotkeyDescription: String {
 		let modifiers = defaultPasteLastTranscriptHotkey.modifiers.sorted.map { $0.stringValue }.joined()
 		let key = defaultPasteLastTranscriptHotkey.key?.toString ?? ""
@@ -49,6 +65,14 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var wordRemappings: [WordRemapping]
 	public var lowercaseTranscripts: Bool
 	public var removePunctuation: Bool
+	public var rewriteMode: RewriteMode
+	/// Tried first. API keys live in the Keychain, not here.
+	public var rewritePrimary: RewriteEndpoint
+	/// Tried when the primary fails or times out; if this fails too, the raw transcript is pasted.
+	public var rewriteFallback: RewriteEndpoint
+	public var rewriteFallbackEnabled: Bool
+	/// Terms the LLM should spell exactly (names, products, jargon).
+	public var vocabulary: [String]
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -82,7 +106,12 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		wordRemovals: [WordRemoval] = HexSettings.defaultWordRemovals,
 		wordRemappings: [WordRemapping] = [],
 		lowercaseTranscripts: Bool = false,
-		removePunctuation: Bool = false
+		removePunctuation: Bool = false,
+		rewriteMode: RewriteMode = .clean,
+		rewritePrimary: RewriteEndpoint = HexSettings.defaultRewritePrimary,
+		rewriteFallback: RewriteEndpoint = HexSettings.defaultRewriteFallback,
+		rewriteFallbackEnabled: Bool = true,
+		vocabulary: [String] = []
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -110,6 +139,11 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.wordRemappings = wordRemappings
 		self.lowercaseTranscripts = lowercaseTranscripts
 		self.removePunctuation = removePunctuation
+		self.rewriteMode = rewriteMode
+		self.rewritePrimary = rewritePrimary
+		self.rewriteFallback = rewriteFallback
+		self.rewriteFallbackEnabled = rewriteFallbackEnabled
+		self.vocabulary = vocabulary
 		normalizeDoubleTapSettings()
 	}
 
@@ -160,6 +194,11 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case wordRemappings
 	case lowercaseTranscripts
 	case removePunctuation
+	case rewriteMode
+	case rewritePrimary
+	case rewriteFallback
+	case rewriteFallbackEnabled
+	case vocabulary
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -294,6 +333,11 @@ private enum HexSettingsSchema {
 			default: defaults.wordRemappings
 		).eraseToAny(),
 		SettingsField(.lowercaseTranscripts, keyPath: \.lowercaseTranscripts, default: defaults.lowercaseTranscripts).eraseToAny(),
-		SettingsField(.removePunctuation, keyPath: \.removePunctuation, default: defaults.removePunctuation).eraseToAny()
+		SettingsField(.removePunctuation, keyPath: \.removePunctuation, default: defaults.removePunctuation).eraseToAny(),
+		SettingsField(.rewriteMode, keyPath: \.rewriteMode, default: defaults.rewriteMode).eraseToAny(),
+		SettingsField(.rewritePrimary, keyPath: \.rewritePrimary, default: defaults.rewritePrimary).eraseToAny(),
+		SettingsField(.rewriteFallback, keyPath: \.rewriteFallback, default: defaults.rewriteFallback).eraseToAny(),
+		SettingsField(.rewriteFallbackEnabled, keyPath: \.rewriteFallbackEnabled, default: defaults.rewriteFallbackEnabled).eraseToAny(),
+		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny()
 	]
 }

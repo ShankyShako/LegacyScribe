@@ -7,15 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		4F0D6A012F1A000100000001 /* HexCore in Frameworks */ = {isa = PBXBuildFile; productRef = 476316262E5FB31400913CDE /* HexCore */; };
-		4F0D6A022F1A000100000001 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E012D444EE900D26DA6 /* ComposableArchitecture */; };
-		4F0D6A042F1A000100000001 /* Sharing in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A072F1A000100000001 /* Sharing */; };
-		4F0D6A052F1A000100000001 /* Sharing in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A072F1A000100000001 /* Sharing */; };
-		4F0D6A082F1A000100000001 /* CasePaths in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0C2F1A000100000001 /* CasePaths */; };
-		4F0D6A092F1A000100000001 /* IdentifiedCollections in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0D2F1A000100000001 /* IdentifiedCollections */; };
-		4F0D6A0E2F1A000100000001 /* CasePaths in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0C2F1A000100000001 /* CasePaths */; };
-		4F0D6A0F2F1A000100000001 /* Dependencies in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E092D44525B00D26DA6 /* Dependencies */; };
-		4F0D6A102F1A000100000001 /* IdentifiedCollections in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0D2F1A000100000001 /* IdentifiedCollections */; };
 		47512ABF2E14D8C9000E25BA /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 47512ABE2E14D8C9000E25BA /* WhisperKit */; };
 		476316272E5FB31400913CDE /* HexCore in Frameworks */ = {isa = PBXBuildFile; productRef = 476316262E5FB31400913CDE /* HexCore */; };
 		4765045E2D45900200C7EA60 /* Pow in Frameworks */ = {isa = PBXBuildFile; productRef = 4765045D2D45900200C7EA60 /* Pow */; };
@@ -25,6 +16,15 @@
 		47E05E0A2D44525B00D26DA6 /* Dependencies in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E092D44525B00D26DA6 /* Dependencies */; };
 		47E05E0C2D44525B00D26DA6 /* DependenciesMacros in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E0B2D44525B00D26DA6 /* DependenciesMacros */; };
 		47E16A622EC6C9D300885CF7 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 47E16A612EC6C9D300885CF7 /* FluidAudio */; };
+		4F0D6A012F1A000100000001 /* HexCore in Frameworks */ = {isa = PBXBuildFile; productRef = 476316262E5FB31400913CDE /* HexCore */; };
+		4F0D6A022F1A000100000001 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E012D444EE900D26DA6 /* ComposableArchitecture */; };
+		4F0D6A042F1A000100000001 /* Sharing in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A072F1A000100000001 /* Sharing */; };
+		4F0D6A052F1A000100000001 /* Sharing in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A072F1A000100000001 /* Sharing */; };
+		4F0D6A082F1A000100000001 /* CasePaths in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0C2F1A000100000001 /* CasePaths */; };
+		4F0D6A092F1A000100000001 /* IdentifiedCollections in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0D2F1A000100000001 /* IdentifiedCollections */; };
+		4F0D6A0E2F1A000100000001 /* CasePaths in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0C2F1A000100000001 /* CasePaths */; };
+		4F0D6A0F2F1A000100000001 /* Dependencies in Frameworks */ = {isa = PBXBuildFile; productRef = 47E05E092D44525B00D26DA6 /* Dependencies */; };
+		4F0D6A102F1A000100000001 /* IdentifiedCollections in Frameworks */ = {isa = PBXBuildFile; productRef = 4F0D6A0D2F1A000100000001 /* IdentifiedCollections */; };
 		B5045C972D78DED500D0A119 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = B5045C962D78DED500D0A119 /* MarkdownUI */; };
 		B53356002D7B8D4900E5F542 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B53355FF2D7B8D4900E5F542 /* Localizable.xcstrings */; };
 /* End PBXBuildFile section */
@@ -59,17 +59,17 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		4F0D6A032F1A000100000001 /* HexTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = HexTests;
-			sourceTree = "<group>";
-		};
 		47E05DF02D444EC600D26DA6 /* Hex */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				476BAD402D47E8500088C61F /* Exceptions for "Hex" folder in "Hex" target */,
 			);
 			path = Hex;
+			sourceTree = "<group>";
+		};
+		4F0D6A032F1A000100000001 /* HexTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = HexTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -464,13 +464,12 @@
 		47E05DFE2D444EC700D26DA6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = Hex/Hex.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;
 				DEAD_CODE_STRIPPING = YES;
@@ -502,6 +501,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.genovamongalo.LegacyScribe.debug;
 				PRODUCT_MODULE_NAME = Hex;
 				PRODUCT_NAME = "LegacyScribe Debug";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
 				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
@@ -516,13 +516,12 @@
 		47E05DFF2D444EC700D26DA6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
 				CODE_SIGN_ENTITLEMENTS = Hex/Hex.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 92;
 				DEAD_CODE_STRIPPING = YES;
@@ -553,6 +552,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.genovamongalo.LegacyScribe;
 				PRODUCT_MODULE_NAME = Hex;
 				PRODUCT_NAME = LegacyScribe;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
 				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;

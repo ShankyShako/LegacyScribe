@@ -277,7 +277,7 @@ final class RecordingRaceTests: XCTestCase {
 
   private static func makeState() -> TranscriptionFeature.State {
     TranscriptionFeature.State(
-      hexSettings: Shared(value: .init()),
+      hexSettings: Shared(value: .init(rewriteMode: .raw)),
       isRemappingScratchpadFocused: false,
       modelBootstrapState: Shared(value: .init(isModelReady: true)),
       transcriptionHistory: Shared(value: .init())

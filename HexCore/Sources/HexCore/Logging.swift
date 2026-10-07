@@ -20,6 +20,7 @@ public enum HexLog {
     case settings = "Settings"
     case permissions = "Permissions"
     case latency = "Latency"
+    case rewrite = "Rewrite"
   }
 
   public static func logger(_ category: Category) -> os.Logger {
@@ -41,6 +42,7 @@ public enum HexLog {
   public static let settings = logger(.settings)
   public static let permissions = logger(.permissions)
   public static let latency = logger(.latency)
+  public static let rewrite = logger(.rewrite)
   /// Dictation stage events (keyUp → captureStopped → transcribed → postProcessed → pasted); view in Instruments' os_signpost track.
   public static let latencySignposter = OSSignposter(logger: latency)
 }

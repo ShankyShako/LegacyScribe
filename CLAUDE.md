@@ -21,6 +21,11 @@ Before writing an STT engine adapter, read `docs/research/engines.md` (verified 
 | No `-Xlinker -interposable` (dropped InjectionIII hot reload) | FluidAudio ≥0.17 links a Rust xcframework (`NemoTextProcessing`) whose symbols fail to bind under `-interposable`; the Debug app aborts in dyld at launch |
 | Private mode = zero sockets; local LLM in-process via mlx-swift-lm | Enforced in P2 by a single `NetworkPolicy` gate plus a test |
 | Cohere Transcribe has no timestamps and no free-text prompt | Word timings come from a CTC forced aligner; vocabulary biasing for Cohere is LLM-side only |
+| LLM rewrite (Raw / Clean / Prompt modes) pulled ahead of P1 (2026-10-06) | The user wants cleanup and coding-prompt restructuring now; it's the thin slice of P2 (one OpenAI-compatible client, no provider registry, no MLX yet) |
+| Rewrite chain: primary endpoint → fallback endpoint → paste the transcript unchanged | A failed or slow LLM must never cost a dictation. `RewriteChain` is pure and tested; the raw transcript is kept in history (`Transcript.rawText`) |
+| Default primary: OmniRoute on CONFORMANT, `groq/openai/gpt-oss-120b`, reasoning `low`, 5 s. Default fallback: local Ollama `qwen3:8b`, reasoning `none`, 10 s | Measured 2026-10-06: Groq 0.6–1.0 s with the best structure; Ollama 0.7–2.6 s warm, ~4.5 s cold; Gemini Flash 2–30 s and truncates when it spends tokens on reasoning |
+| A `finish_reason: length` answer is a failure, and a rewrite over 4× the dictation + 400 chars is rejected | A cut-off rewrite or a model answering the dictation instead of rewriting it must not be pasted |
+| API keys in the Keychain (service `com.genovamongalo.LegacyScribe.rewrite`, account `apiKey.<role>`), never in `hex_settings.json` | Settings JSON is plain text |
 
 ## Layout and naming
 
@@ -34,6 +39,7 @@ Internal names still say Hex (`Hex/` target, `HexCore` package, `HexLog`, `URL.h
 
 - Log through `HexLog.<category>` with `privacy: .private` on transcript text and paths. Add a category rather than using `print`.
 - Hotkey behaviour is specified in `docs/hotkey-semantics.md`; change the spec and `HotKeyProcessorTests` together.
+- The rewrite step lives in `HexCore/Sources/HexCore/Rewrite/` (prompts, sanitizer, request format, fallback chain) and `Hex/Clients/RewriteClient.swift` (transport). Results are in `docs/bench-results.md`.
 - Every dictation stage is stamped in `DictationTimeline` (`HexLog.latencySignposter`). New pipeline stages (LLM, context capture) get their own stamp so the menu readout stays a true key-up→paste breakdown.
 - MLX code needs its Metal library: build MLX targets with `xcodebuild`, never `swift build`. Xcode 26 ships the Metal compiler separately (`xcodebuild -downloadComponent MetalToolchain`, ~700 MB, once per machine).
 - Slow GitHub link: `tools/spm-shallow-mirrors.sh` fetches single commits of the large packages and writes gitignored `mirrors.json` files. Re-run it after bumping a mirrored pin; `--remove` reverts to GitHub.

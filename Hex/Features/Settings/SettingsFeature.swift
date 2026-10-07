@@ -59,6 +59,11 @@ struct SettingsFeature {
     var modelDownload = ModelDownloadFeature.State()
     var shouldFlashModelSection = false
 
+    // LLM rewrite endpoints; API keys mirror the Keychain.
+    var rewriteAPIKeys: [RewriteEndpointRole: String] = [:]
+    var rewriteModelOptions: [RewriteEndpointRole: [String]] = [:]
+    var rewriteStatus: [RewriteEndpointRole: RewriteEndpointStatus] = [:]
+
   }
 
   enum Action: BindableAction {
@@ -115,6 +120,17 @@ struct SettingsFeature {
     case setRemappingScratchpadFocused(Bool)
     case setLowercaseTranscripts(Bool)
     case setRemovePunctuation(Bool)
+
+    // LLM rewrite
+    case setRewriteMode(RewriteMode)
+    case setRewriteEndpoint(RewriteEndpointRole, RewriteEndpoint)
+    case setRewriteFallbackEnabled(Bool)
+    case setVocabulary([String])
+    case setRewriteAPIKey(RewriteEndpointRole, String)
+    case loadRewriteModels(RewriteEndpointRole)
+    case rewriteModelsLoaded(RewriteEndpointRole, [String])
+    case testRewriteEndpoint(RewriteEndpointRole)
+    case rewriteStatusChanged(RewriteEndpointRole, RewriteEndpointStatus)
   }
 
   @Dependency(\.keyEventMonitor) var keyEventMonitor
@@ -122,6 +138,8 @@ struct SettingsFeature {
   @Dependency(\.recording) var recording
   @Dependency(\.soundEffects) var soundEffects
   @Dependency(\.transcriptPersistence) var transcriptPersistence
+  @Dependency(\.rewrite) var rewrite
+  @Dependency(\.keychain) var keychain
 
   private func deleteAudioEffect(for transcripts: [Transcript]) -> Effect<Action> {
     .run { [transcriptPersistence] _ in
@@ -233,6 +251,9 @@ struct SettingsFeature {
         return .none
 
       case .task:
+        for role in RewriteEndpointRole.allCases {
+          state.rewriteAPIKeys[role] = keychain.read(role.keychainAccount) ?? ""
+        }
         if let url = Bundle.main.url(forResource: "languages", withExtension: "json"),
           let data = try? Data(contentsOf: url),
           let languages = try? JSONDecoder().decode([Language].self, from: data)
@@ -496,6 +517,78 @@ struct SettingsFeature {
           await recording.warmUpRecorder()
         }
 
+      case let .setRewriteMode(mode):
+        state.$hexSettings.withLock { $0.rewriteMode = mode }
+        return .none
+
+      case let .setRewriteEndpoint(role, endpoint):
+        state.$hexSettings.withLock {
+          switch role {
+          case .primary: $0.rewritePrimary = endpoint
+          case .fallback: $0.rewriteFallback = endpoint
+          }
+        }
+        return .none
+
+      case let .setRewriteFallbackEnabled(enabled):
+        state.$hexSettings.withLock { $0.rewriteFallbackEnabled = enabled }
+        return .none
+
+      case let .setVocabulary(terms):
+        state.$hexSettings.withLock { $0.vocabulary = terms }
+        return .none
+
+      case let .setRewriteAPIKey(role, key):
+        state.rewriteAPIKeys[role] = key
+        return .run { [keychain] _ in
+          do {
+            try keychain.write(role.keychainAccount, key.trimmingCharacters(in: .whitespacesAndNewlines))
+          } catch {
+            HexLog.rewrite.error("Saving the \(role.rawValue, privacy: .public) API key failed: \(error.localizedDescription, privacy: .public)")
+          }
+        }
+
+      case let .loadRewriteModels(role):
+        let endpoint = state.hexSettings.endpoint(for: role)
+        let apiKey = state.rewriteAPIKeys[role]
+        state.rewriteStatus[role] = .working("Loading models…")
+        return .run { [rewrite] send in
+          do {
+            let models = try await rewrite.listModels(endpoint.baseURL, apiKey)
+            await send(.rewriteModelsLoaded(role, models))
+            await send(.rewriteStatusChanged(role, .ok("\(models.count) models")))
+          } catch {
+            await send(.rewriteStatusChanged(role, .failed(Self.describeRewriteError(error, listingModels: true))))
+          }
+        }
+
+      case let .rewriteModelsLoaded(role, models):
+        state.rewriteModelOptions[role] = models
+        return .none
+
+      case let .testRewriteEndpoint(role):
+        let endpoint = state.hexSettings.endpoint(for: role)
+        let apiKey = state.rewriteAPIKeys[role]
+        let mode = state.hexSettings.rewriteMode == .raw ? RewriteMode.clean : state.hexSettings.rewriteMode
+        let vocabulary = state.hexSettings.vocabulary
+        state.rewriteStatus[role] = .working("Testing \(endpoint.model)…")
+        return .run { [rewrite] send in
+          let sample = "um so so I wanted to uh move the weekly sink to thursday and like tell the team"
+          guard let messages = RewritePromptBuilder.messages(mode: mode, transcript: sample, vocabulary: vocabulary) else { return }
+          let start = ContinuousClock.now
+          do {
+            let output = RewriteOutputSanitizer.sanitize(try await rewrite.complete(endpoint, apiKey, messages))
+            let ms = Int((ContinuousClock.now - start) / .milliseconds(1))
+            await send(.rewriteStatusChanged(role, .ok("\(ms) ms: \(output)")))
+          } catch {
+            await send(.rewriteStatusChanged(role, .failed(Self.describeRewriteError(error, listingModels: false))))
+          }
+        }
+
+      case let .rewriteStatusChanged(role, status):
+        state.rewriteStatus[role] = status
+        return .none
+
       case let .setSoundEffectsEnabled(enabled):
         state.$hexSettings.withLock { $0.soundEffectsEnabled = enabled }
         return .run { _ in
@@ -576,5 +669,36 @@ struct SettingsFeature {
 
       }
     }
+  }
+}
+
+// MARK: - LLM rewrite helpers
+
+enum RewriteEndpointStatus: Equatable {
+  case working(String)
+  case ok(String)
+  case failed(String)
+}
+
+extension HexSettings {
+  func endpoint(for role: RewriteEndpointRole) -> RewriteEndpoint {
+    switch role {
+    case .primary: rewritePrimary
+    case .fallback: rewriteFallback
+    }
+  }
+}
+
+extension SettingsFeature {
+  static func describeRewriteError(_ error: Error, listingModels: Bool) -> String {
+    if case let ChatCompletionAPI.Failure.http(status, _) = error, status == 401 || status == 403 {
+      return listingModels
+        ? "HTTP \(status): listing models needs an API key here. You can still type a model ID."
+        : "HTTP \(status): check the API key"
+    }
+    if case ChatCompletionAPI.Failure.http(404, _) = error {
+      return "HTTP 404: unknown model or wrong base URL"
+    }
+    return error.localizedDescription
   }
 }

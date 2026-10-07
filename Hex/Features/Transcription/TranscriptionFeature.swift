@@ -22,6 +22,8 @@ struct TranscriptionFeature {
     var isRecording: Bool = false
     var isTranscribing: Bool = false
     var isPrewarming: Bool = false
+    /// The LLM rewrite of the last dictation is in flight (shown like transcribing).
+    var isRewriting: Bool = false
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
@@ -52,6 +54,7 @@ struct TranscriptionFeature {
     // Transcription result flow
     case transcriptionResult(String, URL, TimeInterval, DictationTimeline)
     case transcriptionError(Error, URL?)
+    case rewriteStateChanged(Bool)
 
     // Model availability
     case modelMissing
@@ -72,6 +75,8 @@ struct TranscriptionFeature {
   @Dependency(\.sleepManagement) var sleepManagement
   @Dependency(\.date.now) var now
   @Dependency(\.transcriptPersistence) var transcriptPersistence
+  @Dependency(\.rewrite) var rewrite
+  @Dependency(\.keychain) var keychain
 
   var body: some ReducerOf<Self> {
     Reduce { state, action in
@@ -119,6 +124,10 @@ struct TranscriptionFeature {
 
       case let .transcriptionResult(result, audioURL, duration, timeline):
         return handleTranscriptionResult(&state, result: result, audioURL: audioURL, duration: duration, timeline: timeline)
+
+      case let .rewriteStateChanged(isRewriting):
+        state.isRewriting = isRewriting
+        return .none
 
       case let .transcriptionError(error, audioURL):
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
@@ -461,53 +470,63 @@ private extension TranscriptionFeature {
     }
 
     transcriptionFeatureLogger.info("Raw transcription: '\(result, privacy: .private)'")
-    let remappings = state.hexSettings.wordRemappings
-    let removalsEnabled = state.hexSettings.wordRemovalsEnabled
-    let removals = state.hexSettings.wordRemovals
-    let modifiedResult: String
-    if state.isRemappingScratchpadFocused {
-      modifiedResult = result
-      transcriptionFeatureLogger.info("Scratchpad focused; skipping word modifications")
-    } else {
-      var output = result
-      if removalsEnabled {
-        let removedResult = WordRemovalApplier.apply(output, removals: removals)
-        if removedResult != output {
-          let enabledRemovalCount = removals.filter(\.isEnabled).count
-          transcriptionFeatureLogger.info("Applied \(enabledRemovalCount) word removal(s)")
-        }
-        output = removedResult
-      }
-      let remappedResult = WordRemappingApplier.apply(output, remappings: remappings)
-      if remappedResult != output {
-        transcriptionFeatureLogger.info("Applied \(remappings.count) word remapping(s)")
-      }
-      let formattedResult = TranscriptFormattingApplier.apply(
-        remappedResult,
-        lowercase: state.hexSettings.lowercaseTranscripts,
-        removePunctuation: state.hexSettings.removePunctuation
-      )
-      if formattedResult != remappedResult {
-        transcriptionFeatureLogger.info("Applied paste formatting")
-      }
-      modifiedResult = formattedResult
-    }
-
-    guard !modifiedResult.isEmpty else {
-      return .run { _ in
-        FileManager.default.removeItemIfExists(at: audioURL)
-      }
+    let settings = state.hexSettings
+    let skipModifications = state.isRemappingScratchpadFocused
+    if skipModifications {
+      transcriptionFeatureLogger.info("Scratchpad focused; skipping word modifications and rewrite")
     }
 
     let sourceAppBundleID = state.sourceAppBundleID
     let sourceAppName = state.sourceAppName
     let transcriptionHistory = state.$transcriptionHistory
-    let engine = state.hexSettings.selectedModel
+    let engine = settings.selectedModel
+    let rewriteMode = skipModifications ? RewriteMode.raw : settings.rewriteMode
 
     return .run { send in
+      var timeline = timeline
+      var output = skipModifications ? result : applyWordModifications(result, settings: settings)
+      var appliedRewrite: RewriteMode?
+      var rewriteOutcome: RewriteOutcome?
+
+      if rewriteMode != .raw, !output.isEmpty {
+        await send(.rewriteStateChanged(true))
+        let outcome = await rewriteTranscript(output, mode: rewriteMode, settings: settings, targetAppName: sourceAppName)
+        await send(.rewriteStateChanged(false))
+        timeline.rewritten = stampLatency("rewritten")
+        guard !Task.isCancelled else {
+          FileManager.default.removeItemIfExists(at: audioURL)
+          return
+        }
+        rewriteOutcome = outcome
+        if outcome.rewrittenBy != nil {
+          output = outcome.text
+          appliedRewrite = rewriteMode
+        }
+      }
+
+      if !skipModifications {
+        let formatted = TranscriptFormattingApplier.apply(
+          output,
+          lowercase: settings.lowercaseTranscripts,
+          removePunctuation: settings.removePunctuation
+        )
+        if formatted != output {
+          transcriptionFeatureLogger.info("Applied paste formatting")
+        }
+        output = formatted
+      }
+
+      guard !output.isEmpty else {
+        FileManager.default.removeItemIfExists(at: audioURL)
+        return
+      }
+
       do {
         try await finalizeRecordingAndStoreTranscript(
-          result: modifiedResult,
+          result: output,
+          rawText: appliedRewrite == nil ? nil : result,
+          rewriteMode: appliedRewrite,
+          rewriteOutcome: rewriteOutcome,
           duration: duration,
           sourceAppBundleID: sourceAppBundleID,
           sourceAppName: sourceAppName,
@@ -521,6 +540,56 @@ private extension TranscriptionFeature {
       }
     }
     .cancellable(id: CancelID.transcription)
+  }
+
+  /// Word removals then remappings, as configured in Settings.
+  func applyWordModifications(_ text: String, settings: HexSettings) -> String {
+    var output = text
+    if settings.wordRemovalsEnabled {
+      let removedResult = WordRemovalApplier.apply(output, removals: settings.wordRemovals)
+      if removedResult != output {
+        let enabledRemovalCount = settings.wordRemovals.filter(\.isEnabled).count
+        transcriptionFeatureLogger.info("Applied \(enabledRemovalCount) word removal(s)")
+      }
+      output = removedResult
+    }
+    let remappedResult = WordRemappingApplier.apply(output, remappings: settings.wordRemappings)
+    if remappedResult != output {
+      transcriptionFeatureLogger.info("Applied \(settings.wordRemappings.count) word remapping(s)")
+    }
+    return remappedResult
+  }
+
+  /// Primary endpoint, then the fallback; returns the transcript unchanged if both fail,
+  /// so a network problem never costs the dictation.
+  func rewriteTranscript(
+    _ transcript: String,
+    mode: RewriteMode,
+    settings: HexSettings,
+    targetAppName: String?
+  ) async -> RewriteOutcome {
+    var endpoints: [(RewriteEndpointRole, RewriteEndpoint)] = [(.primary, settings.rewritePrimary)]
+    if settings.rewriteFallbackEnabled {
+      endpoints.append((.fallback, settings.rewriteFallback))
+    }
+    let outcome = await RewriteChain.run(
+      transcript: transcript,
+      mode: mode,
+      vocabulary: settings.vocabulary,
+      targetAppName: targetAppName,
+      endpoints: endpoints
+    ) { [rewrite, keychain] role, endpoint, messages in
+      try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)
+    }
+    for failure in outcome.failures {
+      HexLog.rewrite.error("Rewrite failed: \(failure, privacy: .public)")
+    }
+    if let model = outcome.rewrittenBy {
+      HexLog.rewrite.info("Rewrote with \(model, privacy: .public) (\(mode.rawValue, privacy: .public))")
+    } else {
+      HexLog.rewrite.notice("Every rewrite endpoint failed; pasting the transcript as recognized")
+    }
+    return outcome
   }
 
   func handleTranscriptionError(
@@ -542,6 +611,9 @@ private extension TranscriptionFeature {
   /// Move file to permanent location, create a transcript record, paste text, and play sound.
   func finalizeRecordingAndStoreTranscript(
     result: String,
+    rawText: String?,
+    rewriteMode: RewriteMode?,
+    rewriteOutcome: RewriteOutcome?,
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
@@ -551,16 +623,22 @@ private extension TranscriptionFeature {
     engine: String
   ) async throws {
     var timeline = timeline
+    var savedTranscriptID: UUID?
     @Shared(.hexSettings) var hexSettings: HexSettings
 
     if hexSettings.saveTranscriptionHistory {
-      let transcript = try await transcriptPersistence.save(
+      var transcript = try await transcriptPersistence.save(
         result,
         audioURL,
         duration,
         sourceAppBundleID,
         sourceAppName
       )
+      transcript.rawText = rawText
+      transcript.rewriteMode = rewriteMode
+      transcript.rewrittenBy = rewriteOutcome?.rewrittenBy
+      transcript.rewriteFailures = rewriteOutcome.flatMap { $0.failures.isEmpty ? nil : $0.failures }
+      savedTranscriptID = transcript.id
 
       transcriptionHistory.withLock { history in
         history.history.insert(transcript, at: 0)
@@ -589,6 +667,12 @@ private extension TranscriptionFeature {
       HexLog.latency.notice("Dictation latency \(latency.summary, privacy: .public) engine=\(engine, privacy: .public)")
       @Shared(.lastDictationLatency) var lastDictationLatency: DictationLatency?
       $lastDictationLatency.withLock { $0 = latency }
+      if let savedTranscriptID {
+        transcriptionHistory.withLock { history in
+          guard let index = history.history.firstIndex(where: { $0.id == savedTranscriptID }) else { return }
+          history.history[index].latency = latency
+        }
+      }
     }
   }
 
@@ -607,6 +691,7 @@ private extension TranscriptionFeature {
     state.isTranscribing = false
     state.isRecording = false
     state.isPrewarming = false
+    state.isRewriting = false
 
     return .merge(
       .cancel(id: CancelID.transcription),
@@ -658,7 +743,7 @@ struct TranscriptionView: View {
   @ObserveInjection var inject
 
   var status: TranscriptionIndicatorView.Status {
-    if store.isTranscribing {
+    if store.isTranscribing || (store.isRewriting && !store.isRecording) {
       return .transcribing
     } else if store.isRecording {
       return .recording

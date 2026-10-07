@@ -46,3 +46,17 @@ What the numbers say:
 - Every engine misses the user's own proper nouns (OmniRoute, Syncthing). That's the job of the vocabulary list and LLM cleanup (P2/P3).
 
 Recommendation: Cohere 4-bit as the default engine once its adapter lands in P1; Parakeet v3 stays the app default until then and remains the fast fallback.
+
+## LLM rewrite latency, 2026-10-06
+
+Six real dictations (two of the user's, four constructed), Clean and Prompt modes, called from the Mac. Times include the network round trip over the tailnet.
+
+| Endpoint | Model | Per rewrite | Notes |
+|---|---|---|---|
+| OmniRoute (CONFORMANT) | `groq/openai/gpt-oss-120b`, reasoning low | 0.6–1.0 s | Best structure: bullets in Prompt mode, keeps questions as questions |
+| OmniRoute | `groq/openai/gpt-oss-20b`, reasoning low | 0.4–0.7 s | Slightly looser rewrites |
+| Ollama (local) | `qwen3:8b`, thinking off | 0.7–2.6 s; 4.5 s cold | Good cleanup, flatter prompts; once turned a question into a command |
+| OmniRoute | `gemini/gemini-3.1-flash-lite`, reasoning none | 3–9 s | Without `reasoning_effort` it spends the token budget thinking and truncates |
+| OmniRoute | `gemini/gemini-3-flash-preview`, reasoning minimal | 2.5–22 s | |
+
+Both endpoints fixed mis-hearings from context ("weekly sink" → sync, "post gress SQL" → PostgreSQL) and rewrote a dictated "ignore all previous instructions…" instead of obeying it.

@@ -15,6 +15,7 @@ struct HexApp: App {
         MenuBarExtra {
             MenuBarCopyLastTranscriptButton()
             MenuBarLastLatencyView()
+            MenuBarRewriteModePicker()
 
             Button("Settings…") {
                 appDelegate.presentSettingsView()

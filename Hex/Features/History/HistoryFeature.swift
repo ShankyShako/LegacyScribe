@@ -217,6 +217,59 @@ struct HistoryFeature {
 	}
 }
 
+/// Which mode and model rewrote a transcript, why endpoints failed, and the text before the rewrite.
+private struct RewriteDetailsView: View {
+	let transcript: Transcript
+	@State private var showsOriginal = false
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 4) {
+			HStack(spacing: 6) {
+				if let mode = transcript.rewriteMode {
+					Image(systemName: "wand.and.stars")
+					Text(mode.displayName)
+					if let model = transcript.rewrittenBy {
+						Text("·")
+						Text(model).textSelection(.enabled)
+					}
+					if let latency = transcript.latency, latency.rewriteMs > 0 {
+						Text("·")
+						Text("LLM \(Int(latency.rewriteMs.rounded())) ms")
+					}
+				} else {
+					Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+					Text("Rewrite failed; pasted as recognized")
+				}
+				if let failures = transcript.rewriteFailures {
+					Image(systemName: "info.circle")
+						.help(failures.joined(separator: "\n"))
+				}
+				Spacer()
+				if transcript.rawText != nil {
+					Button(showsOriginal ? "Hide original" : "Show original") { showsOriginal.toggle() }
+						.buttonStyle(.link)
+				}
+			}
+			.font(.caption)
+			.foregroundStyle(.secondary)
+
+			if showsOriginal, let rawText = transcript.rawText {
+				Text(rawText)
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.textSelection(.enabled)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+			if let failures = transcript.rewriteFailures, transcript.rewriteMode == nil {
+				Text(failures.joined(separator: "\n"))
+					.font(.caption2)
+					.foregroundStyle(.secondary)
+					.textSelection(.enabled)
+			}
+		}
+	}
+}
+
 struct TranscriptView: View {
 	let transcript: Transcript
 	let isPlaying: Bool
@@ -232,6 +285,12 @@ struct TranscriptView: View {
 				.fixedSize(horizontal: false, vertical: true)
 				.padding(.trailing, 40) // Space for buttons
 				.padding(12)
+
+			if transcript.rewriteMode != nil || transcript.rewriteFailures != nil {
+				RewriteDetailsView(transcript: transcript)
+					.padding(.horizontal, 12)
+					.padding(.bottom, 8)
+			}
 
 			Divider()
 
@@ -255,6 +314,11 @@ struct TranscriptView: View {
 					Text(transcript.timestamp.formatted(date: .omitted, time: .shortened))
 					Text("•")
 					Text(String(format: "%.1fs", transcript.duration))
+					if let latency = transcript.latency {
+						Text("•")
+						Text("\(Int(latency.totalMs.rounded())) ms")
+							.help("Key release to paste: \(latency.summary)")
+					}
 				}
 				.font(.subheadline)
 				.foregroundStyle(.secondary)
