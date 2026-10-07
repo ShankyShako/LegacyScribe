@@ -27,16 +27,7 @@ struct HexApp: App {
 				NSApplication.shared.terminate(nil)
 			}.keyboardShortcut("q")
 		} label: {
-			if let image = NSImage(named: "HexIcon").map({
-				let ratio = $0.size.height / $0.size.width
-				$0.size.height = 18
-				$0.size.width = 18 / ratio
-				return $0
-			}) {
-				Image(nsImage: image)
-			} else {
-				Image(systemName: "hexagon")
-			}
+			MenuBarIconLabel()
 		}
 		.commands {
 			CommandGroup(after: .appInfo) {

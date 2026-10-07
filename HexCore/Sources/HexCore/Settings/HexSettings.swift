@@ -71,6 +71,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	/// Tried when the primary fails or times out; if this fails too, the raw transcript is pasted.
 	public var rewriteFallback: RewriteEndpoint
 	public var rewriteFallbackEnabled: Bool
+	/// ⌃⌥1–3 switch the rewrite mode from any app.
+	public var rewriteModeShortcutsEnabled: Bool
 	/// Terms the LLM should spell exactly (names, products, jargon).
 	public var vocabulary: [String]
 
@@ -111,6 +113,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		rewritePrimary: RewriteEndpoint = HexSettings.defaultRewritePrimary,
 		rewriteFallback: RewriteEndpoint = HexSettings.defaultRewriteFallback,
 		rewriteFallbackEnabled: Bool = true,
+		rewriteModeShortcutsEnabled: Bool = true,
 		vocabulary: [String] = []
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
@@ -143,6 +146,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.rewritePrimary = rewritePrimary
 		self.rewriteFallback = rewriteFallback
 		self.rewriteFallbackEnabled = rewriteFallbackEnabled
+		self.rewriteModeShortcutsEnabled = rewriteModeShortcutsEnabled
 		self.vocabulary = vocabulary
 		normalizeDoubleTapSettings()
 	}
@@ -198,6 +202,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case rewritePrimary
 	case rewriteFallback
 	case rewriteFallbackEnabled
+	case rewriteModeShortcutsEnabled
 	case vocabulary
 }
 
@@ -338,6 +343,7 @@ private enum HexSettingsSchema {
 		SettingsField(.rewritePrimary, keyPath: \.rewritePrimary, default: defaults.rewritePrimary).eraseToAny(),
 		SettingsField(.rewriteFallback, keyPath: \.rewriteFallback, default: defaults.rewriteFallback).eraseToAny(),
 		SettingsField(.rewriteFallbackEnabled, keyPath: \.rewriteFallbackEnabled, default: defaults.rewriteFallbackEnabled).eraseToAny(),
+		SettingsField(.rewriteModeShortcutsEnabled, keyPath: \.rewriteModeShortcutsEnabled, default: defaults.rewriteModeShortcutsEnabled).eraseToAny(),
 		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny()
 	]
 }

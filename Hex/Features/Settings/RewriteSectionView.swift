@@ -27,6 +27,17 @@ struct RewriteSectionView: View {
 			}
 
 			Label {
+				Toggle("Switch modes with ⌃⌥1 / ⌃⌥2 / ⌃⌥3", isOn: Binding(
+					get: { store.hexSettings.rewriteModeShortcutsEnabled },
+					set: { store.send(.setRewriteModeShortcutsEnabled($0)) }
+				))
+				Text("Raw, Clean, Prompt, from any app. The menu bar icon shows R or P when the mode isn't Clean.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "keyboard")
+			}
+
+			Label {
 				TextField("Vocabulary", text: $vocabularyText, prompt: Text("OmniRoute, Syncthing"), axis: .vertical)
 					.lineLimit(1...4)
 					.onChange(of: vocabularyText) { _, text in

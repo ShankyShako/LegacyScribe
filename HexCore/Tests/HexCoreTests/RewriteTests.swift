@@ -1,5 +1,6 @@
 import Foundation
 @testable import HexCore
+import Sauce
 import Testing
 
 struct RewritePromptBuilderTests {
@@ -228,3 +229,25 @@ struct RewriteSettingsCodingTests {
 		#expect(history.history.first?.latency == nil)
 	}
 }
+
+struct RewriteModeShortcutTests {
+	@Test(arguments: [(Key.one, RewriteMode.raw), (.two, .clean), (.three, .prompt)])
+	func controlOptionDigitSelectsMode(key: Key, mode: RewriteMode) {
+		#expect(RewriteMode.forShortcut(key: key, modifiers: [.control, .option]) == mode)
+	}
+
+	@Test
+	func eitherSideOfTheModifiersWorks() {
+		let modifiers: Modifiers = [.control.with(side: .left), .option.with(side: .right)]
+		#expect(RewriteMode.forShortcut(key: .three, modifiers: modifiers) == .prompt)
+	}
+
+	@Test
+	func otherChordsAreIgnored() {
+		#expect(RewriteMode.forShortcut(key: .one, modifiers: [.option]) == nil)
+		#expect(RewriteMode.forShortcut(key: .one, modifiers: [.control, .option, .shift]) == nil)
+		#expect(RewriteMode.forShortcut(key: .four, modifiers: [.control, .option]) == nil)
+		#expect(RewriteMode.forShortcut(key: nil, modifiers: [.control, .option]) == nil)
+	}
+}
+

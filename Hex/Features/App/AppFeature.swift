@@ -186,6 +186,13 @@ struct AppFeature {
           return false
         }
 
+        if hexSettings.rewriteModeShortcutsEnabled,
+           let mode = RewriteMode.forShortcut(key: keyEvent.key, modifiers: keyEvent.modifiers) {
+          $hexSettings.withLock { $0.rewriteMode = mode }
+          HexLog.rewrite.info("Rewrite mode switched to \(mode.rawValue, privacy: .public) by shortcut")
+          return true // Intercept so the digit doesn't reach the focused app
+        }
+
         // Check if this matches the paste last transcript hotkey
         guard let pasteHotkey = hexSettings.pasteLastTranscriptHotkey,
               let key = keyEvent.key,
