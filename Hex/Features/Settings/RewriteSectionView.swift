@@ -3,7 +3,7 @@ import HexCore
 import Inject
 import SwiftUI
 
-/// LLM rewrite: mode, primary and fallback endpoints, vocabulary.
+/// LLM rewrite: mode, vocabulary, and the primary and fallback endpoints (one section each).
 struct RewriteSectionView: View {
 	@ObserveInjection var inject
 	@Bindable var store: StoreOf<SettingsFeature>
@@ -11,38 +11,42 @@ struct RewriteSectionView: View {
 
 	var body: some View {
 		Section {
-			Picker("Mode", selection: Binding(
-				get: { store.hexSettings.rewriteMode },
-				set: { store.send(.setRewriteMode($0)) }
-			)) {
-				ForEach(RewriteMode.allCases, id: \.self) { mode in
-					Text(mode.displayName).tag(mode)
+			Label {
+				Picker("Mode", selection: Binding(
+					get: { store.hexSettings.rewriteMode },
+					set: { store.send(.setRewriteMode($0)) }
+				)) {
+					ForEach(RewriteMode.allCases, id: \.self) { mode in
+						Text(mode.displayName).tag(mode)
+					}
 				}
+				.pickerStyle(.segmented)
+				Text(store.hexSettings.rewriteMode.summary).settingsCaption()
+			} icon: {
+				Image(systemName: "wand.and.stars")
 			}
-			.pickerStyle(.segmented)
-			Text(store.hexSettings.rewriteMode.summary).settingsCaption()
 
-			RewriteEndpointEditor(store: store, role: .primary, title: "Primary")
-
-			Toggle("Fall back to a second endpoint", isOn: Binding(
-				get: { store.hexSettings.rewriteFallbackEnabled },
-				set: { store.send(.setRewriteFallbackEnabled($0)) }
-			))
-			if store.hexSettings.rewriteFallbackEnabled {
-				RewriteEndpointEditor(store: store, role: .fallback, title: "Fallback")
-			}
-			Text("If every endpoint fails or times out, the transcript is pasted as recognized, so a dictation is never lost.")
-				.settingsCaption()
-
-			VStack(alignment: .leading, spacing: 4) {
-				Text("Vocabulary")
-				TextField("OmniRoute, Syncthing, LegacyScribe", text: $vocabularyText, axis: .vertical)
-					.lineLimit(2...5)
+			Label {
+				TextField("Vocabulary", text: $vocabularyText, prompt: Text("OmniRoute, Syncthing"), axis: .vertical)
+					.lineLimit(1...4)
 					.onChange(of: vocabularyText) { _, text in
 						store.send(.setVocabulary(Self.terms(from: text)))
 					}
 				Text("Names and jargon the rewrite should spell exactly. Separate with commas or new lines.")
 					.settingsCaption()
+			} icon: {
+				Image(systemName: "character.book.closed")
+			}
+
+			Label {
+				Toggle("Fall back to a second endpoint", isOn: Binding(
+					get: { store.hexSettings.rewriteFallbackEnabled },
+					set: { store.send(.setRewriteFallbackEnabled($0)) }
+				))
+				Text("If every endpoint fails or times out, the transcript is pasted as recognized, so a dictation is never lost.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "arrow.triangle.branch")
 			}
 		} header: {
 			Text("Rewrite")
@@ -51,6 +55,11 @@ struct RewriteSectionView: View {
 			vocabularyText = store.hexSettings.vocabulary.joined(separator: ", ")
 		}
 		.enableInjection()
+
+		RewriteEndpointSection(store: store, role: .primary, title: "Rewrite: Primary Endpoint", icon: "network")
+		if store.hexSettings.rewriteFallbackEnabled {
+			RewriteEndpointSection(store: store, role: .fallback, title: "Rewrite: Fallback Endpoint", icon: "desktopcomputer")
+		}
 	}
 
 	static func terms(from text: String) -> [String] {
@@ -60,10 +69,11 @@ struct RewriteSectionView: View {
 	}
 }
 
-private struct RewriteEndpointEditor: View {
+private struct RewriteEndpointSection: View {
 	@Bindable var store: StoreOf<SettingsFeature>
 	let role: RewriteEndpointRole
 	let title: String
+	let icon: String
 
 	private static let efforts = ["", "none", "minimal", "low", "medium", "high"]
 
@@ -75,55 +85,76 @@ private struct RewriteEndpointEditor: View {
 	}
 
 	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text(title).font(.headline)
-
-			TextField("Base URL", text: endpoint.baseURL, prompt: Text("https://host:20128/v1"))
-				.textContentType(.URL)
-
-			HStack {
-				TextField("Model", text: endpoint.model, prompt: Text("groq/openai/gpt-oss-120b"))
-				let options = store.rewriteModelOptions[role] ?? []
-				Menu("Pick") {
-					if options.isEmpty {
-						Text("Press Load first")
-					}
-					ForEach(options, id: \.self) { model in
-						Button(model) { endpoint.wrappedValue.model = model }
-					}
-				}
-				.fixedSize()
-				Button("Load") { store.send(.loadRewriteModels(role)) }
+		Section {
+			Label {
+				TextField("Base URL", text: endpoint.baseURL, prompt: Text("https://host:20128/v1"))
+			} icon: {
+				Image(systemName: icon)
 			}
 
-			SecureField("API key", text: Binding(
-				get: { store.rewriteAPIKeys[role] ?? "" },
-				set: { store.send(.setRewriteAPIKey(role, $0)) }
-			), prompt: Text("Optional; stored in the Keychain"))
+			Label {
+				TextField("Model", text: endpoint.model, prompt: Text("groq/openai/gpt-oss-120b"))
+				HStack {
+					let options = store.rewriteModelOptions[role] ?? []
+					Menu("Choose from list") {
+						if options.isEmpty {
+							Text("Press Load models first")
+						}
+						ForEach(options, id: \.self) { model in
+							Button(model) { endpoint.wrappedValue.model = model }
+						}
+					}
+					.fixedSize()
+					Button("Load models") { store.send(.loadRewriteModels(role)) }
+					Spacer()
+				}
+			} icon: {
+				Image(systemName: "cpu")
+			}
 
-			HStack {
-				Picker("Reasoning", selection: endpoint.reasoningEffort) {
+			Label {
+				SecureField("API key", text: Binding(
+					get: { store.rewriteAPIKeys[role] ?? "" },
+					set: { store.send(.setRewriteAPIKey(role, $0)) }
+				), prompt: Text("Optional"))
+				Text("Stored in the Keychain.").settingsCaption()
+			} icon: {
+				Image(systemName: "key")
+			}
+
+			Label {
+				Picker("Reasoning effort", selection: endpoint.reasoningEffort) {
 					ForEach(Self.efforts, id: \.self) { effort in
 						Text(effort.isEmpty ? "Model default" : effort).tag(effort)
 					}
 				}
-				.fixedSize()
-				Spacer()
+			} icon: {
+				Image(systemName: "brain")
+			}
+
+			Label {
 				Stepper(
-					"Timeout \(Int(endpoint.wrappedValue.timeout)) s",
+					"Timeout: \(Int(endpoint.wrappedValue.timeout)) s",
 					value: endpoint.timeout,
 					in: 1...60,
 					step: 1
 				)
-				.fixedSize()
+			} icon: {
+				Image(systemName: "timer")
 			}
 
-			HStack(alignment: .firstTextBaseline) {
-				Button("Test") { store.send(.testRewriteEndpoint(role)) }
-				statusView
+			Label {
+				HStack(alignment: .firstTextBaseline) {
+					Button("Test") { store.send(.testRewriteEndpoint(role)) }
+					statusView
+					Spacer(minLength: 0)
+				}
+			} icon: {
+				Image(systemName: "checkmark.seal")
 			}
+		} header: {
+			Text(title)
 		}
-		.padding(.vertical, 4)
 	}
 
 	@ViewBuilder
@@ -149,7 +180,7 @@ private extension View {
 	func settingsStatus(_ color: Color) -> some View {
 		self.font(.caption)
 			.foregroundStyle(color)
+			.lineLimit(3)
 			.textSelection(.enabled)
-			.fixedSize(horizontal: false, vertical: true)
 	}
 }
