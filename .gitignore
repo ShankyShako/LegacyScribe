@@ -1,23 +1,21 @@
-build/
-updates/
 .vscode
 .DS_Store
 
-# Xcode
+# Xcode / SwiftPM
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcuserstate
 buildServer.json
-bin
-scripts
-tools
 ExportOptions.plist
-HexCore/.build
-HexCore/.swiftpm/xcode/xcuserdata/kit.xcuserdatad/xcschemes
-FluidAudio/
-node_modules/
-.npm-cache/
-.tmp/
+**/.build/
+**/.swiftpm/xcode/
+# Machine-local shallow mirrors written by tools/spm-shallow-mirrors.sh
+**/swiftpm/configuration/mirrors.json
+**/.swiftpm/configuration/mirrors.json
+
+# Python tooling (tools/, later phases)
+**/.venv/
+**/__pycache__/
 
 # Claude
 .claude/

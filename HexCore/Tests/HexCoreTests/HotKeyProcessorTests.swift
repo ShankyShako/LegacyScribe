@@ -35,6 +35,21 @@ struct HotKeyProcessorTests {
         )
     }
 
+    // LegacyScribe's default hotkey is Right Option alone; Left Option must stay free for typing.
+    @Test
+    func pressAndHold_rightOptionOnly_ignoresLeftOption() throws {
+        let rightOption = Modifier.option.with(side: .right)
+        runScenario(
+            hotkey: HotKey(key: nil, modifiers: [rightOption]),
+            steps: [
+                ScenarioStep(time: 0.0, key: nil, modifiers: [.option.with(side: .left)], expectedOutput: nil, expectedIsMatched: false),
+                ScenarioStep(time: 0.1, key: nil, modifiers: [], expectedOutput: nil, expectedIsMatched: false),
+                ScenarioStep(time: 1.0, key: nil, modifiers: [rightOption], expectedOutput: .startRecording, expectedIsMatched: true),
+                ScenarioStep(time: 1.5, key: nil, modifiers: [], expectedOutput: .stopRecording, expectedIsMatched: false),
+            ]
+        )
+    }
+
     // Tests releasing the hotkey stops recording
     @Test
     func pressAndHold_stopsRecordingOnHotkeyRelease_standard() throws {

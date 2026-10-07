@@ -50,7 +50,7 @@ struct TranscriptionFeature {
     case discard  // Silent discard (too short/accidental)
 
     // Transcription result flow
-    case transcriptionResult(String, URL, TimeInterval)
+    case transcriptionResult(String, URL, TimeInterval, DictationTimeline)
     case transcriptionError(Error, URL?)
 
     // Model availability
@@ -117,8 +117,8 @@ struct TranscriptionFeature {
 
       // MARK: - Transcription Results
 
-      case let .transcriptionResult(result, audioURL, duration):
-        return handleTranscriptionResult(&state, result: result, audioURL: audioURL, duration: duration)
+      case let .transcriptionResult(result, audioURL, duration, timeline):
+        return handleTranscriptionResult(&state, result: result, audioURL: audioURL, duration: duration, timeline: timeline)
 
       case let .transcriptionError(error, audioURL):
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
@@ -318,7 +318,8 @@ private extension TranscriptionFeature {
 
   func handleStopRecording(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
-    
+    let keyUp = stampLatency("keyUp")
+
     let stopTime = now
     let startTime = state.recordingStartTime
     let duration = startTime.map { stopTime.timeIntervalSince($0) } ?? 0
@@ -374,6 +375,7 @@ private extension TranscriptionFeature {
         // Allow system to sleep again
         await sleepManagement.allowSleep()
 
+        var timeline = DictationTimeline(keyUp: keyUp)
         var audioURL: URL?
         defer {
           if let audioURL {
@@ -399,6 +401,7 @@ private extension TranscriptionFeature {
             return
           }
           audioURL = capturedURL
+          timeline.captureStopped = stampLatency("captureStopped")
           guard !Task.isCancelled else { return }
           soundEffect.play(.stopRecording)
 
@@ -411,10 +414,11 @@ private extension TranscriptionFeature {
           )
 
           let result = try await transcription.transcribe(capturedURL, model, decodeOptions) { _ in }
+          timeline.transcribed = stampLatency("transcribed")
 
           transcriptionFeatureLogger.notice("Transcribed audio from \(capturedURL.lastPathComponent) to text length \(result.count)")
           audioURL = nil
-          await send(.transcriptionResult(result, capturedURL, duration))
+          await send(.transcriptionResult(result, capturedURL, duration, timeline))
         } catch {
           transcriptionFeatureLogger.error("Transcription failed: \(error.localizedDescription)")
           await send(.transcriptionError(error, nil))
@@ -432,7 +436,8 @@ private extension TranscriptionFeature {
     _ state: inout State,
     result: String,
     audioURL: URL,
-    duration: TimeInterval
+    duration: TimeInterval,
+    timeline: DictationTimeline
   ) -> Effect<Action> {
     state.isTranscribing = false
     state.isPrewarming = false
@@ -497,6 +502,7 @@ private extension TranscriptionFeature {
     let sourceAppBundleID = state.sourceAppBundleID
     let sourceAppName = state.sourceAppName
     let transcriptionHistory = state.$transcriptionHistory
+    let engine = state.hexSettings.selectedModel
 
     return .run { send in
       do {
@@ -506,7 +512,9 @@ private extension TranscriptionFeature {
           sourceAppBundleID: sourceAppBundleID,
           sourceAppName: sourceAppName,
           audioURL: audioURL,
-          transcriptionHistory: transcriptionHistory
+          transcriptionHistory: transcriptionHistory,
+          timeline: timeline,
+          engine: engine
         )
       } catch {
         await send(.transcriptionError(error, audioURL))
@@ -538,8 +546,11 @@ private extension TranscriptionFeature {
     sourceAppBundleID: String?,
     sourceAppName: String?,
     audioURL: URL,
-    transcriptionHistory: Shared<TranscriptionHistory>
+    transcriptionHistory: Shared<TranscriptionHistory>,
+    timeline: DictationTimeline,
+    engine: String
   ) async throws {
+    var timeline = timeline
     @Shared(.hexSettings) var hexSettings: HexSettings
 
     if hexSettings.saveTranscriptionHistory {
@@ -568,8 +579,23 @@ private extension TranscriptionFeature {
       FileManager.default.removeItemIfExists(at: audioURL)
     }
 
+    timeline.postProcessed = stampLatency("postProcessed")
+
     await pasteboard.paste(result)
+    timeline.pasted = stampLatency("pasted")
     soundEffect.play(.pasteTranscript)
+
+    if let latency = timeline.latency(audioSeconds: duration, engine: engine) {
+      HexLog.latency.notice("Dictation latency \(latency.summary, privacy: .public) engine=\(engine, privacy: .public)")
+      @Shared(.lastDictationLatency) var lastDictationLatency: DictationLatency?
+      $lastDictationLatency.withLock { $0 = latency }
+    }
+  }
+
+  /// Marks a pipeline stage in Instruments' os_signpost track and returns the stage time.
+  func stampLatency(_ stage: StaticString) -> ContinuousClock.Instant {
+    HexLog.latencySignposter.emitEvent(stage)
+    return .now
   }
 }
 

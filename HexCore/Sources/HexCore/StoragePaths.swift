@@ -10,7 +10,7 @@ public extension URL {
 				appropriateFor: nil,
 				create: true
 			)
-			let hexDirectory = appSupport.appendingPathComponent("com.kitlangton.Hex", isDirectory: true)
+			let hexDirectory = appSupport.appendingPathComponent("LegacyScribe", isDirectory: true)
 			try fm.createDirectory(at: hexDirectory, withIntermediateDirectories: true)
 			return hexDirectory
 		}
@@ -30,29 +30,19 @@ public extension URL {
 
 	static var hexModelsDirectory: URL {
 		get throws {
-			let modelsDirectory = try hexApplicationSupport.appendingPathComponent("models", isDirectory: true)
+			let modelsDirectory = try hexApplicationSupport.appendingPathComponent("Models/whisperkit", isDirectory: true)
 			try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
 			return modelsDirectory
 		}
 	}
 
-	/// Where FluidAudio (Parakeet) keeps its on-disk model caches.
-	///
-	/// FluidAudio writes to `<Application Support>/FluidAudio/Models/<variant>` in
-	/// the sandboxed container, regardless of `XDG_CACHE_HOME`. We surface that
-	/// location so "Show in Finder" can reveal Parakeet caches instead of the
-	/// WhisperKit-only models directory.
+	/// Root for FluidAudio (Parakeet) models. FluidAudio places each model in a
+	/// `<root>/<repo-folder>` sibling of whatever directory it is handed, so the app and
+	/// `tools/lsbench` share downloads as long as they use this root.
 	static var hexParakeetModelsDirectory: URL {
 		get throws {
-			let fm = FileManager.default
-			let appSupport = try fm.url(
-				for: .applicationSupportDirectory,
-				in: .userDomainMask,
-				appropriateFor: nil,
-				create: true
-			)
-			let dir = appSupport.appendingPathComponent("FluidAudio/Models", isDirectory: true)
-			try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+			let dir = try hexApplicationSupport.appendingPathComponent("Models/fluidaudio", isDirectory: true)
+			try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 			return dir
 		}
 	}

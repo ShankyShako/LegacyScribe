@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "47E05DED2D444EC600D26DA6"
-               BuildableName = "Hex.app"
+               BuildableName = "LegacyScribe.app"
                BlueprintName = "Hex"
                ReferencedContainer = "container:Hex.xcodeproj">
             </BuildableReference>
@@ -58,7 +58,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "47E05DED2D444EC600D26DA6"
-            BuildableName = "Hex.app"
+            BuildableName = "LegacyScribe.app"
             BlueprintName = "Hex"
             ReferencedContainer = "container:Hex.xcodeproj">
          </BuildableReference>
@@ -87,7 +87,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "47E05DED2D444EC600D26DA6"
-            BuildableName = "Hex.app"
+            BuildableName = "LegacyScribe.app"
             BlueprintName = "Hex"
             ReferencedContainer = "container:Hex.xcodeproj">
          </BuildableReference>

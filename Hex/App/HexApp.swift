@@ -1,6 +1,5 @@
 import ComposableArchitecture
 import Inject
-import Sparkle
 import AppKit
 import SwiftUI
 
@@ -15,16 +14,15 @@ struct HexApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarCopyLastTranscriptButton()
+            MenuBarLastLatencyView()
 
             Button("Settings…") {
                 appDelegate.presentSettingsView()
             }.keyboardShortcut(",")
 
-            CheckForUpdatesView()
-			
 			Divider()
 			
-			Button("Quit Hex") {
+			Button("Quit LegacyScribe") {
 				NSApplication.shared.terminate(nil)
 			}.keyboardShortcut("q")
 		} label: {
@@ -41,8 +39,6 @@ struct HexApp: App {
 		}
 		.commands {
 			CommandGroup(after: .appInfo) {
-				CheckForUpdatesView()
-
 				Button("Settings…") {
 					appDelegate.presentSettingsView()
 				}.keyboardShortcut(",")

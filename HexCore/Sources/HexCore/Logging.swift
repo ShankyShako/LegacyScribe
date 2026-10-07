@@ -1,8 +1,8 @@
-import os.log
+import os
 
 /// Shared helper for creating consistent os.Logger instances across the Hex app and HexCore.
 public enum HexLog {
-  public static let subsystem = "com.kitlangton.Hex"
+  public static let subsystem = "com.genovamongalo.LegacyScribe"
 
   public enum Category: String {
     case app = "App"
@@ -19,6 +19,7 @@ public enum HexLog {
     case history = "History"
     case settings = "Settings"
     case permissions = "Permissions"
+    case latency = "Latency"
   }
 
   public static func logger(_ category: Category) -> os.Logger {
@@ -39,4 +40,7 @@ public enum HexLog {
   public static let history = logger(.history)
   public static let settings = logger(.settings)
   public static let permissions = logger(.permissions)
+  public static let latency = logger(.latency)
+  /// Dictation stage events (keyUp → captureStopped → transcribed → postProcessed → pasted); view in Instruments' os_signpost track.
+  public static let latencySignposter = OSSignposter(logger: latency)
 }

@@ -1,216 +1,47 @@
-# Hex – Dev Notes for Agents
+# LegacyScribe — agent notes
 
-This file provides guidance for coding agents working in this repo.
+Personal, MIT-licensed macOS menu-bar dictation app: hold a hotkey, speak, cleaned text is pasted into the focused app. Local-first; cloud LLMs optional. Hard fork of [Hex](https://github.com/kitlangton/Hex) (MIT, upstream Swift app is frozen): the `upstream` git remote points there.
 
-## Project Overview
+The phased plan and its risk register live in `docs/plan.md`. Read it before starting a phase.
+Before writing an STT engine adapter, read `docs/research/engines.md` (verified API names, versions and caveats per engine).
 
-Hex is a macOS menu bar application for on‑device voice‑to‑text. It supports Whisper (Core ML via WhisperKit) and Parakeet TDT v3 (Core ML via FluidAudio). Users activate transcription with hotkeys; text can be auto‑pasted into the active app.
+## Decisions (record new ones here, with the reason)
 
-## Build & Development Commands
+| Decision | Reason |
+|---|---|
+| macOS 26+, Apple Silicon only | SpeechAnalyzer needs macOS 26; MLX needs Apple Silicon |
+| Unsandboxed, hardened runtime | Reading other apps' text via Accessibility (P3) is blocked in the sandbox |
+| Bundle IDs `com.genovamongalo.LegacyScribe` (Release), `.debug` (Debug) | Stable signing identity keeps TCC grants (mic, Accessibility, Input Monitoring) across rebuilds. Debug and Release are separate TCC entries. |
+| Data root `~/Library/Application Support/LegacyScribe/` (`URL.hexApplicationSupport`) | Never inside the repo: the repo sits in a Syncthing-synced folder |
+| Models under `<data root>/Models/{whisperkit,fluidaudio,mlx}` | `tools/lsbench` and the app share downloads; FluidAudio puts each model in `<root>/<repo-folder>`, so pass any child of the root |
+| Retention: raw audio 30 days; text history, correction pairs, calibration audio forever | Pairs are fine-tuning data (P5) |
+| Default hotkey: hold Right ⌥ = push-to-talk, double-tap = lock, Esc = cancel | Left ⌥ stays free for typing; side matching lives in `Modifier.matches` |
+| Sparkle removed | Upstream feed would "update" this app back into Hex |
+| Manual signing with a personal signing identity, no provisioning profile | The team isn't an Xcode-account team, so automatic signing can't use it; the app's entitlements need no profile |
+| No `-Xlinker -interposable` (dropped InjectionIII hot reload) | FluidAudio ≥0.17 links a Rust xcframework (`NemoTextProcessing`) whose symbols fail to bind under `-interposable`; the Debug app aborts in dyld at launch |
+| Private mode = zero sockets; local LLM in-process via mlx-swift-lm | Enforced in P2 by a single `NetworkPolicy` gate plus a test |
+| Cohere Transcribe has no timestamps and no free-text prompt | Word timings come from a CTC forced aligner; vocabulary biasing for Cohere is LLM-side only |
 
-```bash
-# Build the app
-xcodebuild -scheme Hex -configuration Release
+## Layout and naming
 
-# Run tests (must be run from HexCore directory for unit tests)
-cd HexCore && swift test
+Internal names still say Hex (`Hex/` target, `HexCore` package, `HexLog`, `URL.hex*`, module `Hex`). Rename only as part of the P1 package extraction, not piecemeal. User-visible strings say LegacyScribe.
 
-# Or run all tests via Xcode
-xcodebuild test -scheme Hex
+- `Hex/` app (SwiftUI + TCA). Features are reducers; side effects go through dependency clients in `Hex/Clients/`.
+- `HexCore/` pure logic with unit tests: hotkeys, settings, latency, formatting.
+- `tools/lsbench/` headless STT benchmark: latency, peak memory, WER over fixture clips. Usage is in its `README.md`; results so far are in `docs/bench-results.md`.
 
-# Open in Xcode (recommended for development)
-open Hex.xcodeproj
-```
+## Working rules
 
-## Architecture
+- Log through `HexLog.<category>` with `privacy: .private` on transcript text and paths. Add a category rather than using `print`.
+- Hotkey behaviour is specified in `docs/hotkey-semantics.md`; change the spec and `HotKeyProcessorTests` together.
+- Every dictation stage is stamped in `DictationTimeline` (`HexLog.latencySignposter`). New pipeline stages (LLM, context capture) get their own stamp so the menu readout stays a true key-up→paste breakdown.
+- MLX code needs its Metal library: build MLX targets with `xcodebuild`, never `swift build`. Xcode 26 ships the Metal compiler separately (`xcodebuild -downloadComponent MetalToolchain`, ~700 MB, once per machine).
+- Slow GitHub link: `tools/spm-shallow-mirrors.sh` fetches single commits of the large packages and writes gitignored `mirrors.json` files. Re-run it after bumping a mirrored pin; `--remove` reverts to GitHub.
 
-The app uses **The Composable Architecture (TCA)** for state management. Key architectural components:
+## Verify
 
-### Features (TCA Reducers)
-- `AppFeature`: Root feature coordinating the app lifecycle
-- `TranscriptionFeature`: Core recording and transcription logic
-- `SettingsFeature`: User preferences and configuration
-- `HistoryFeature`: Transcription history management
+CLI builds need `-skipMacroValidation -skipPackagePluginValidation` (TCA, swift-dependencies and case-paths ship macros that Xcode otherwise asks to trust).
 
-### Dependency Clients
-- `TranscriptionClient`: WhisperKit integration for ML transcription
-- `RecordingClient`: AVAudioRecorder wrapper for audio capture
-- `PasteboardClient`: Clipboard operations
-- `KeyEventMonitorClient`: Global hotkey monitoring via Sauce framework
-
-### Key Dependencies
-- **WhisperKit**: Core ML transcription (tracking main branch)
-- **FluidAudio (Parakeet)**: Core ML ASR (multilingual) default model
-- **Sauce**: Keyboard event monitoring
-- **Sparkle**: Auto-updates (feed: https://hex-updates.s3.amazonaws.com/appcast.xml)
-- **Swift Composable Architecture**: State management
-- **Inject** Hot Reloading for SwiftUI
-
-## Important Implementation Details
-
-1. **Hotkey Recording Modes**: The app supports both press-and-hold and double-tap recording modes, implemented in `HotKeyProcessor.swift`. See `docs/hotkey-semantics.md` for detailed behavior specifications including:
-   - **Modifier-only hotkeys** (e.g., Option) use a **0.3s threshold** to prevent accidental triggers from OS shortcuts
-   - **Regular hotkeys** (e.g., Cmd+A) use user's `minimumKeyTime` setting (default 0.2s)
-   - Mouse clicks and extra modifiers are discarded within threshold, ignored after
-   - Only ESC cancels recordings after the threshold
-
-2. **Model Management**: Models are managed by `ModelDownloadFeature`. Curated defaults live in `Hex/Resources/Data/models.json`. The Settings UI shows a compact opinionated list (Parakeet + three Whisper sizes). No dropdowns.
-
-3. **Sound Effects**: Audio feedback is provided via `SoundEffect.swift` using files in `Resources/Audio/`
-
-4. **Window Management**: Uses an `InvisibleWindow` for the transcription indicator overlay
-
-5. **Permissions**: Requires audio input and automation entitlements (see `Hex.entitlements`)
-
-6. **Logging**: All diagnostics should use the unified logging helper `HexLog` (`HexCore/Sources/HexCore/Logging.swift`). Pick an existing category (e.g., `.transcription`, `.recording`, `.settings`) or add a new case so Console predicates stay consistent. Avoid `print` and prefer privacy annotations (`, privacy: .private`) for anything potentially sensitive like transcript text or file paths.
-
-## Models (2025‑11)
-
-- Default: Parakeet TDT v3 (multilingual) via FluidAudio
-- Additional curated: Whisper Small (Tiny), Whisper Medium (Base), Whisper Large v3
-- Note: Distil‑Whisper is English‑only and not shown by default
-
-### Storage Locations
-
-- WhisperKit models
-  - `~/Library/Application Support/com.kitlangton.Hex/models/argmaxinc/whisperkit-coreml/<model>`
-- Parakeet (FluidAudio)
-  - We set `XDG_CACHE_HOME` on launch so Parakeet caches under the app container:
-  - `~/Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3-coreml`
-  - Legacy `~/.cache/fluidaudio/Models/…` is not visible to the sandbox; re‑download or import.
-
-### Progress + Availability
-
-- WhisperKit: native progress
-- Parakeet: best‑effort progress by polling the model directory size during download
-- Availability detection scans both `Application Support/FluidAudio/Models` and our app cache path
-
-## Building & Running
-
-- macOS 14+, Xcode 15+
-
-### Packages
-
-- WhisperKit: `https://github.com/argmaxinc/WhisperKit`
-- FluidAudio: `https://github.com/FluidInference/FluidAudio.git` (link `FluidAudio` to Hex target)
-
-### Entitlements (Sandbox)
-
-- `com.apple.security.app-sandbox = true`
-- `com.apple.security.network.client = true` (HF downloads)
-- `com.apple.security.files.user-selected.read-write = true` (optional import)
-- `com.apple.security.automation.apple-events = true` (media control)
-
-### Cache root (Parakeet)
-
-Set at app launch and logged:
-
-```
-XDG_CACHE_HOME = ~/Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex/cache
-```
-
-FluidAudio models reside under `Application Support/FluidAudio/Models`.
-
-## UI
-
-- Settings → Transcription Model shows a compact list with radio selection, accuracy/speed dots, size on right, and trailing menu / download‑check icon.
-- Context menu offers Show in Finder / Delete.
-
-## Troubleshooting
-
-- Repeated mic prompts during debug: ensure Debug signing uses "Apple Development" so TCC sticks
-- Sandbox network errors (‑1003): add `com.apple.security.network.client = true` (already set)
-- Parakeet not detected: ensure it resides under the container path above; downloading from Hex places it correctly.
-
-## Changelog Workflow Expectations
-
-1. **Always add a changeset:** Any feature, UX change, or bug fix that ships to users must come with a `.changeset/*.md` fragment. The summary should mention the user-facing impact plus the GitHub issue/PR number (for example, "Improve Fn hotkey stability (#89)").
-2. **Use non-interactive changeset creation:** AI agents should use the non-interactive script:
-   ```bash
-   bun run changeset:add-ai patch "Your summary here"
-   bun run changeset:add-ai minor "Add new feature"
-   bun run changeset:add-ai major "Breaking change"
-   ```
-3. **Only create changesets, don't process them:** Agents should only create changeset fragments. The release tool is responsible for running `changeset version` to collect changesets into `CHANGELOG.md` and syncing to `Hex/Resources/changelog.md`.
-4. **Reference GitHub issues:** When a change addresses a filed issue, link it in code comments and the changeset entry (`(#123)`) so release notes and Sparkle updates point users back to the discussion. If the work should close an issue, include "Fixes #123" (or "Closes #123") in the commit or PR description so GitHub auto-closes it once merged.
-
-## Git Commit Messages
-
-- Use a concise, descriptive subject line that captures the user-facing impact (roughly 50–70 characters).
-- Follow up with as much context as needed in the body. Include the rationale, notable tradeoffs, relevant logs, or reproduction steps—future debugging benefits from having the full story directly in git history.
-- Reference any related GitHub issues in the body if the change tracks ongoing work.
-
-## Releasing a New Version
-
-Releases are automated via a local CLI tool that handles building, signing, notarizing, and uploading.
-
-### Prerequisites
-
-1. **AWS credentials** must be set (for S3 uploads):
-   ```bash
-   export AWS_ACCESS_KEY_ID=...
-   export AWS_SECRET_ACCESS_KEY=...
-   ```
-
-2. **Notarization credentials** stored in keychain (one-time setup):
-   ```bash
-   xcrun notarytool store-credentials "AC_PASSWORD"
-   ```
-
-3. **Dependencies installed** at project root and in tools:
-   ```bash
-   bun install                # project root (for changesets)
-   cd tools && bun install    # tools dependencies
-   ```
-
-### Release Steps
-
-1. **Ensure all changes are committed** - the release tool requires a clean working tree
-
-2. **Ensure changesets exist** - any user-facing change should have a `.changeset/*.md` file:
-   ```bash
-   bun run changeset:add-ai patch "Fix microphone selection"
-   ```
-
-3. **Run the release command** from project root:
-   ```bash
-   bun run tools/src/cli.ts release
-   ```
-
-### What the Release Tool Does
-
-1. Checks for clean working tree
-2. Finds pending changesets and applies them (bumps version in `package.json`)
-3. Syncs changelog to `Hex/Resources/changelog.md`
-4. Updates `Info.plist` and `project.pbxproj` with new version
-5. Increments build number
-6. Cleans DerivedData and archives with xcodebuild
-7. Exports and signs with Developer ID
-8. Notarizes app with Apple
-9. Creates and signs DMG
-10. Notarizes DMG
-11. Generates Sparkle appcast
-12. Uploads to S3 (versioned DMG + `hex-latest.dmg` + appcast.xml)
-13. Commits version changes, creates git tag, pushes
-14. Creates GitHub release with DMG and ZIP attachments
-
-### If No Changesets Exist
-
-The tool will prompt you to either:
-- Stop and create a changeset (recommended)
-- Continue with manual version bump (useful for re-running failed releases)
-
-### Artifacts
-
-Each release produces:
-- `Hex-{version}.dmg` - Signed, notarized DMG
-- `Hex-{version}.zip` - For Homebrew cask
-- `hex-latest.dmg` - Always points to latest
-- `appcast.xml` - Sparkle update feed
-
-### Troubleshooting
-
-- **"Working tree is not clean"**: Commit or stash all changes before releasing
-- **Notarization fails**: Check Apple ID credentials and app-specific password
-- **S3 upload fails**: Verify AWS credentials and bucket permissions
-- **Build fails**: Ensure Xcode 16+ and valid code signing certificates
+- `cd HexCore && swift test` runs the core unit tests.
+- `xcodebuild -scheme Hex -configuration Debug -skipMacroValidation -skipPackagePluginValidation build` builds the signed `LegacyScribe Debug.app`. Signing fails with `errSecInternalComponent` when the keychain prompt for the private key can't be answered (headless sessions): add `CODE_SIGNING_ALLOWED=NO` for compile-only checks.
+- `xcodebuild test -scheme Hex -skipMacroValidation -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO` runs the app-level TCA tests.

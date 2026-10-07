@@ -9,11 +9,6 @@ actor ParakeetClient {
   private var models: AsrModels?
   private var currentVariant: ParakeetModel?
   private let logger = HexLog.parakeet
-  private let vendorDirs = [
-    // Our app-specific cache path convention (under XDG or com.kitlangton.Hex/cache)
-    "fluidaudio/Models",
-    "FluidAudio/Models"
-  ]
 
   func isModelAvailable(_ modelName: String) async -> Bool {
     guard let variant = ParakeetModel(rawValue: modelName) else {
@@ -22,8 +17,7 @@ actor ParakeetClient {
     }
     if currentVariant == variant, asr != nil { return true }
 
-    let directory = AsrModels.defaultCacheDirectory(for: variant.asrVersion)
-    migrateLegacyCacheIfNeeded(variant, to: directory)
+    guard let directory = try? cacheDirectory(for: variant) else { return false }
     let available = AsrModels.modelsExist(
       at: directory,
       version: variant.asrVersion
@@ -49,10 +43,6 @@ actor ParakeetClient {
       asr = nil
       models = nil
     }
-    migrateLegacyCacheIfNeeded(
-      variant,
-      to: AsrModels.defaultCacheDirectory(for: variant.asrVersion)
-    )
     let t0 = Date()
     logger.notice("Starting Parakeet load variant=\(variant.identifier)")
     let p = Progress(totalUnitCount: 100)
@@ -60,13 +50,11 @@ actor ParakeetClient {
     progress(p)
 
     // Best-effort progress polling while FluidAudio downloads
-    let fm = FileManager.default
-    let support = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-    let faDir = support?.appendingPathComponent("FluidAudio/Models/\(variant.identifier)", isDirectory: true)
+    let modelDirectory = try cacheDirectory(for: variant)
     let pollTask = Task {
       while p.completedUnitCount < 95 {
         try? await Task.sleep(nanoseconds: 250_000_000)
-        if let dir = faDir, let size = directorySize(dir) {
+        if let size = directorySize(modelDirectory) {
           let target: Double = 650 * 1024 * 1024 // ~650MB
           let frac = max(0.0, min(1.0, Double(size) / target))
           p.completedUnitCount = Int64(5 + frac * 90)
@@ -78,7 +66,7 @@ actor ParakeetClient {
     defer { pollTask.cancel() }
 
     // Download + load the requested variant (returns when all assets are present)
-    let models = try await AsrModels.downloadAndLoad(version: variant.asrVersion)
+    let models = try await AsrModels.downloadAndLoad(to: modelDirectory, version: variant.asrVersion)
     self.models = models
     let manager = AsrManager(config: .init(), models: models)
     self.asr = manager
@@ -100,24 +88,11 @@ actor ParakeetClient {
     return total
   }
 
-  private func migrateLegacyCacheIfNeeded(_ variant: ParakeetModel, to directory: URL) {
-    let legacyDirectory = directory
-      .deletingLastPathComponent()
-      .appendingPathComponent(variant.identifier, isDirectory: true)
-
-    do {
-      if try LegacyModelCacheMigrator.migrate(
-        from: legacyDirectory,
-        to: directory,
-        isValid: {
-          AsrModels.modelsExist(at: $0, version: variant.asrVersion)
-        }
-      ) {
-        logger.notice("Migrated legacy Parakeet cache from \(legacyDirectory.path) to \(directory.path)")
-      }
-    } catch {
-      logger.error("Failed to migrate legacy Parakeet cache: \(error.localizedDescription)")
-    }
+  /// `<Models/fluidaudio>/<repo-folder>`. Throws rather than falling back to FluidAudio's default
+  /// folder, which is shared with other apps and must never be written to or deleted from.
+  private func cacheDirectory(for variant: ParakeetModel) throws -> URL {
+    let folder = AsrModels.defaultCacheDirectory(for: variant.asrVersion).lastPathComponent
+    return try URL.hexParakeetModelsDirectory.appendingPathComponent(folder, isDirectory: true)
   }
 
   func transcribe(_ url: URL) async throws -> String {
@@ -130,60 +105,21 @@ actor ParakeetClient {
     return result.text
   }
 
-  // Delete cached Parakeet models from known locations and reset state
+  /// Deletes this variant's model folder and resets state. Only our own `Models/fluidaudio`
+  /// folder is touched: unsandboxed, `~/Library/Application Support/FluidAudio` and
+  /// `~/.cache` are shared with other FluidAudio apps.
   func deleteCaches(modelName: String) async throws {
     guard let variant = ParakeetModel(rawValue: modelName) else { return }
-    let fm = FileManager.default
-
-    var removedAny = false
-    for dir in modelDirectories(variant) {
-      if fm.fileExists(atPath: dir.path) {
-        try? fm.removeItem(at: dir)
-        removedAny = true
-      }
-    }
+    let directory = try cacheDirectory(for: variant)
+    guard FileManager.default.fileExists(atPath: directory.path) else { return }
+    try FileManager.default.removeItem(at: directory)
 
     // Reset live objects so a future download can proceed cleanly
-    if removedAny {
-      self.asr = nil
-      self.models = nil
-      if currentVariant == variant {
-        currentVariant = nil
-      }
+    self.asr = nil
+    self.models = nil
+    if currentVariant == variant {
+      currentVariant = nil
     }
-  }
-
-  /// Returns all candidate directories where a Parakeet model might be cached.
-  /// Includes both exact matches and prefixed directories (e.g. versioned folders).
-  private func modelDirectories(_ variant: ParakeetModel) -> [URL] {
-    let fm = FileManager.default
-    var result: [URL] = [AsrModels.defaultCacheDirectory(for: variant.asrVersion)]
-
-    for root in candidateRoots() {
-      for vendor in vendorDirs {
-        let base = root.appendingPathComponent(vendor, isDirectory: true)
-        // Exact match directory
-        let direct = base.appendingPathComponent(variant.identifier, isDirectory: true)
-        result.append(direct)
-        // Prefixed directories (e.g. versioned folders)
-        if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles) {
-          for item in items where item.lastPathComponent.hasPrefix(variant.identifier) && item != direct {
-            result.append(item)
-          }
-        }
-      }
-    }
-    var seen = Set<String>()
-    return result.filter { seen.insert($0.standardizedFileURL.path).inserted }
-  }
-
-  private func candidateRoots() -> [URL] {
-    let fm = FileManager.default
-    let xdg = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"].flatMap { URL(fileURLWithPath: $0, isDirectory: true) }
-    let appSupport = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
-    let appCache = try? URL.hexApplicationSupport.appendingPathComponent("cache", isDirectory: true)
-    let userCache = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache", isDirectory: true)
-    return [xdg, appCache, appSupport, userCache].compactMap { $0 }
   }
 }
 
