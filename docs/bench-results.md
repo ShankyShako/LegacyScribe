@@ -24,4 +24,25 @@ What the numbers say:
 - Every engine heard "is pushed to talk" for "as push to talk", so that is the `say` voice, not the engines.
 - Real mis-hearings: v3 and phonon2 heard "fork X" for "fork Hex". phonon2 also skips inverse text normalization ("ten thirty", "M five", "twenty six"), which accounts for its higher WER.
 
-Synthetic speech can't decide the default engine. Next: record `fixtures/me` with `tools/lsbench/record-voice-fixtures.sh` and re-run every engine on it.
+Synthetic speech can't decide the default engine; see the real-voice results below.
+
+## Real voice (`fixtures/me`), 2026-10-06
+
+The user's 20 clips from `voice-prompts.txt` (3.7–9.8 s each), 3 warm runs. "Per 10 s" is the median of latency scaled to a 10 s clip.
+
+| Engine | Corpus WER | Median latency | Per 10 s | Peak footprint |
+|---|---|---|---|---|
+| Cohere 4-bit (MLX) | **5.28%** | 208 ms | 317 ms | 2.0 GB |
+| Cohere 8-bit (MLX) | 5.63% | 238 ms | 343 ms | 2.9 GB |
+| Parakeet ultra | 8.10% | 48 ms | 74 ms | 50 MB* |
+| Parakeet v3 (app default today) | 8.80% | 46 ms | 73 ms | 48 MB* |
+| Parakeet phonon2 | 8.80% | 46 ms | 71 ms | 51 MB* |
+| Parakeet v2 | 9.15% | 50 ms | 78 ms | 66 MB* |
+
+What the numbers say:
+- Cohere 4-bit is the most accurate and stays well inside the 500 ms budget. 8-bit is no better.
+- Several "errors" are shared by every engine ("tasks", "want", "performs", "doctor's"), so the speaker said those words and the reference is off. Cohere's remaining errors are mostly formatting ("2 p.m.", "Geometry Neuroscience").
+- The gap is jargon. Cohere: "technical depth", "OmniRoot", "Synthing". Parakeet ultra/v3: "weekly sink", "Kohir"/"Kojere" for Cohere, "tail scale", "legacy subscribe", "PostgreSES SQL", and v3's "Quran's cluster" for Kubernetes.
+- Every engine misses the user's own proper nouns (OmniRoute, Syncthing). That's the job of the vocabulary list and LLM cleanup (P2/P3).
+
+Recommendation: Cohere 4-bit as the default engine once its adapter lands in P1; Parakeet v3 stays the app default until then and remains the fast fallback.
