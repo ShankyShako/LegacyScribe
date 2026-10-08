@@ -80,6 +80,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var rewriteInstructions: [String: String]
 	/// Prompt mode writes spoken notation as code ("slash handoff" → /handoff) and knows the user's skills.
 	public var codeTalkEnabled: Bool
+	/// Hold ⌃ and press ⌥ to cycle modes, like ⌘-Tab (`ModeCycler`).
+	public var modeCyclerEnabled: Bool
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -121,7 +123,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		rewriteModeShortcutsEnabled: Bool = true,
 		vocabulary: [String] = [],
 		rewriteInstructions: [String: String] = [:],
-		codeTalkEnabled: Bool = true
+		codeTalkEnabled: Bool = true,
+		modeCyclerEnabled: Bool = true
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -157,6 +160,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.vocabulary = vocabulary
 		self.rewriteInstructions = rewriteInstructions
 		self.codeTalkEnabled = codeTalkEnabled
+		self.modeCyclerEnabled = modeCyclerEnabled
 		normalizeDoubleTapSettings()
 	}
 
@@ -215,6 +219,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case vocabulary
 	case rewriteInstructions
 	case codeTalkEnabled
+	case modeCyclerEnabled
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -357,7 +362,8 @@ private enum HexSettingsSchema {
 		SettingsField(.rewriteModeShortcutsEnabled, keyPath: \.rewriteModeShortcutsEnabled, default: defaults.rewriteModeShortcutsEnabled).eraseToAny(),
 		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny(),
 		SettingsField(.rewriteInstructions, keyPath: \.rewriteInstructions, default: defaults.rewriteInstructions).eraseToAny(),
-		SettingsField(.codeTalkEnabled, keyPath: \.codeTalkEnabled, default: defaults.codeTalkEnabled).eraseToAny()
+		SettingsField(.codeTalkEnabled, keyPath: \.codeTalkEnabled, default: defaults.codeTalkEnabled).eraseToAny(),
+		SettingsField(.modeCyclerEnabled, keyPath: \.modeCyclerEnabled, default: defaults.modeCyclerEnabled).eraseToAny()
 	]
 }
 

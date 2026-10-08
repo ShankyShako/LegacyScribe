@@ -417,6 +417,22 @@ struct HotKeyProcessorTests {
         )
     }
 
+    // Control taps while holding the talk key switch rewrite modes (ModeCycler); recording must continue
+    @Test
+    func pressAndHold_controlTapsAfterThresholdKeepRecording() throws {
+        runScenario(
+            hotkey: HotKey(key: nil, modifiers: [.option.with(side: .right)]),
+            steps: [
+                ScenarioStep(time: 0.0, key: nil, modifiers: [.option.with(side: .right)], expectedOutput: .startRecording, expectedIsMatched: true),
+                ScenarioStep(time: 0.8, key: nil, modifiers: [.option.with(side: .right), .control], expectedOutput: nil, expectedIsMatched: true),
+                ScenarioStep(time: 0.9, key: nil, modifiers: [.option.with(side: .right)], expectedOutput: nil, expectedIsMatched: true),
+                ScenarioStep(time: 1.4, key: nil, modifiers: [.option.with(side: .right), .control], expectedOutput: nil, expectedIsMatched: true),
+                ScenarioStep(time: 1.5, key: nil, modifiers: [.option.with(side: .right)], expectedOutput: nil, expectedIsMatched: true),
+                ScenarioStep(time: 3.0, key: nil, modifiers: [], expectedOutput: .stopRecording, expectedIsMatched: false),
+            ]
+        )
+    }
+
     // Tests that double-tap lock only engages after the second release, not the second press
     @Test
     func doubleTap_onlyLocksAfterSecondRelease() throws {

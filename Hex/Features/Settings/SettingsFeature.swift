@@ -127,6 +127,7 @@ struct SettingsFeature {
     case setRewriteFallbackEnabled(Bool)
     case setRewriteModeShortcutsEnabled(Bool)
     case setCodeTalkEnabled(Bool)
+    case setModeCyclerEnabled(Bool)
     case setVocabulary([String])
     /// Nil or the default text restores the built-in instructions.
     case setRewriteInstructions(RewriteMode, String?)
@@ -540,6 +541,10 @@ struct SettingsFeature {
 
       case let .setRewriteModeShortcutsEnabled(enabled):
         state.$hexSettings.withLock { $0.rewriteModeShortcutsEnabled = enabled }
+        return .none
+
+      case let .setModeCyclerEnabled(enabled):
+        state.$hexSettings.withLock { $0.modeCyclerEnabled = enabled }
         return .none
 
       case let .setCodeTalkEnabled(enabled):

@@ -347,6 +347,9 @@ Result: Hex discards recording silently
 - Press any key within 0.3s → dirty
 - Click mouse within 0.3s → dirty
 
+After 0.3s, extra modifiers are ignored and recording continues. That is what lets a Control tap while
+holding the talk key step to the next rewrite mode (`ModeCycler`, `pressAndHold_controlTapsAfterThresholdKeepRecording`).
+
 **Regular (Cmd+A):**
 - Press different key within 1s → dirty
 - Change modifiers within 1s → dirty

@@ -10,6 +10,7 @@ import CoreGraphics
 import Foundation
 import HexCore
 import Inject
+import os
 import SwiftUI
 import WhisperKit
 
@@ -27,6 +28,8 @@ struct TranscriptionFeature {
     /// Counts dictations whose rewrite failed everywhere and were pasted as recognized; the indicator
     /// shows a notice each time it changes.
     var rewriteFallbackCount = 0
+    /// The ⌃⌥ mode switcher's pick while Control is held; nil when it isn't in use.
+    var modeCycler: ModeCyclerBar?
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
@@ -59,6 +62,8 @@ struct TranscriptionFeature {
     case transcriptionError(Error, URL?)
     case rewriteStateChanged(Bool)
     case rewriteFellBack
+    case modeCycler(ModeCycler.Output)
+    case modeCyclerReveal
 
     // Model availability
     case modelMissing
@@ -69,6 +74,7 @@ struct TranscriptionFeature {
     case recordingStart
     case recordingCleanup
     case transcription
+    case modeCyclerReveal
   }
 
   @Dependency(\.transcription) var transcription
@@ -96,6 +102,7 @@ struct TranscriptionFeature {
         return .merge(
           startMeteringEffect(),
           startHotKeyMonitoringEffect(),
+          startModeCyclerEffect(),
           warmUpRecorderEffect()
         )
 
@@ -138,6 +145,13 @@ struct TranscriptionFeature {
         state.rewriteFallbackCount += 1
         return .none
 
+      case let .modeCycler(output):
+        return handleModeCycler(&state, output: output)
+
+      case .modeCyclerReveal:
+        state.modeCycler?.isVisible = true
+        return .none
+
       case let .transcriptionError(error, audioURL):
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
 
@@ -175,6 +189,91 @@ private extension TranscriptionFeature {
       }
     }
     .cancellable(id: CancelID.metering, cancelInFlight: true)
+  }
+
+  /// Feeds key events to `ModeCycler` (hold ⌃, press ⌥ to cycle modes) and ticks its auto-advance while
+  /// Option is held. Outputs go through one stream so a quick tap's began → released → committed stay in order.
+  func startModeCyclerEffect() -> Effect<Action> {
+    .run { send in
+      @Shared(.isSettingHotKey) var isSettingHotKey: Bool
+      @Shared(.hexSettings) var hexSettings: HexSettings
+      let cycler = OSAllocatedUnfairLock(initialState: ModeCycler())
+      let autoAdvance = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+      let (outputs, continuation) = AsyncStream.makeStream(of: ModeCycler.Output.self)
+
+      @Sendable func setAutoAdvance(running: Bool) {
+        autoAdvance.withLock { task in
+          task?.cancel()
+          task = running ? Task {
+            while !Task.isCancelled {
+              try? await Task.sleep(for: ModeCycler.autoAdvanceInterval)
+              guard !Task.isCancelled, let next = cycler.withLock({ $0.advance() }) else { return }
+              continuation.yield(.advanced(highlight: next))
+            }
+          } : nil
+        }
+      }
+
+      let token = keyEventMonitor.handleKeyEvent { keyEvent in
+        guard hexSettings.modeCyclerEnabled, !isSettingHotKey else { return false }
+        let currentMode = hexSettings.rewriteMode
+        guard let output = cycler.withLock({ $0.handle(keyEvent, currentMode: currentMode) }) else { return false }
+        switch output {
+        case .began, .advanced: setAutoAdvance(running: true)
+        case .optionReleased, .committed, .aborted, .stepped: setAutoAdvance(running: false)
+        }
+        continuation.yield(output)
+        return false // Never swallow: ⌃⌥ chords still reach the focused app
+      }
+
+      await withTaskCancellationHandler {
+        for await output in outputs {
+          await send(.modeCycler(output))
+        }
+      } onCancel: {
+        token.cancel()
+        continuation.finish()
+        setAutoAdvance(running: false)
+      }
+    }
+  }
+
+  func handleModeCycler(_ state: inout State, output: ModeCycler.Output) -> Effect<Action> {
+    switch output {
+    case let .began(highlight):
+      state.modeCycler = ModeCyclerBar(highlight: highlight, isVisible: false)
+      return .run { send in
+        try await Task.sleep(for: ModeCycler.revealDelay)
+        await send(.modeCyclerReveal)
+      }
+      .cancellable(id: CancelID.modeCyclerReveal, cancelInFlight: true)
+
+    case let .advanced(highlight):
+      state.modeCycler = ModeCyclerBar(highlight: highlight, isVisible: true)
+      return .cancel(id: CancelID.modeCyclerReveal)
+
+    case .optionReleased:
+      // A quick ⌃⌥ tap shows the pick right away instead of waiting for the delay.
+      state.modeCycler?.isVisible = true
+      return .cancel(id: CancelID.modeCyclerReveal)
+
+    case let .committed(mode):
+      state.modeCycler = nil
+      state.$hexSettings.withLock { $0.rewriteMode = mode }
+      HexLog.rewrite.info("Rewrite mode switched to \(mode.rawValue, privacy: .public) by the ⌃⌥ switcher")
+      return .cancel(id: CancelID.modeCyclerReveal)
+
+    case .aborted:
+      state.modeCycler = nil
+      return .cancel(id: CancelID.modeCyclerReveal)
+
+    case let .stepped(mode):
+      // Left Option + Control is an ordinary chord when nobody is talking.
+      guard state.isRecording else { return .none }
+      state.$hexSettings.withLock { $0.rewriteMode = mode }
+      HexLog.rewrite.info("Rewrite mode stepped to \(mode.rawValue, privacy: .public) while recording")
+      return .none
+    }
   }
 
   /// Effect to start monitoring hotkey events through the `keyEventMonitor`.
@@ -798,6 +897,11 @@ struct TranscriptionView: View {
     }
   }
 
+  private var cyclerHighlight: RewriteMode? {
+    guard let bar = store.modeCycler, bar.isVisible else { return nil }
+    return bar.highlight
+  }
+
   /// A one-off notice wins; otherwise a non-Clean mode is tagged while recording.
   private var visibleNotice: DictationNotice? {
     if let notice { return notice }
@@ -812,11 +916,15 @@ struct TranscriptionView: View {
         meter: store.meter
       )
       ZStack {
-        if let visibleNotice {
+        if let cyclerHighlight {
+          ModeCyclerBarView(highlight: cyclerHighlight)
+            .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
+        } else if let visibleNotice {
           DictationNoticeView(notice: visibleNotice)
             .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
         }
       }
+      .animation(DictationNoticeView.entrance, value: cyclerHighlight == nil)
       // Only appearing and disappearing animate; a notice replacing another swaps in place.
       .animation(
         visibleNotice == nil ? DictationNoticeView.exit : DictationNoticeView.entrance,

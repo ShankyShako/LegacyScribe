@@ -38,6 +38,17 @@ struct RewriteSectionView: View {
 			}
 
 			Label {
+				Toggle("Cycle modes with ⌃⌥", isOn: Binding(
+					get: { store.hexSettings.modeCyclerEnabled },
+					set: { store.send(.setModeCyclerEnabled($0)) }
+				))
+				Text("Hold ⌃ and press ⌥: a bar shows the modes. Press ⌥ again, or keep holding it, to move along; release ⌃ to switch. While holding the talk key, tap ⌃ to switch mid-dictation.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "rectangle.3.group")
+			}
+
+			Label {
 				Toggle("Code talk in Prompt mode", isOn: Binding(
 					get: { store.hexSettings.codeTalkEnabled },
 					set: { store.send(.setCodeTalkEnabled($0)) }
