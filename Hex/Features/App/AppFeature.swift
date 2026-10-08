@@ -20,6 +20,7 @@ struct AppFeature {
   enum ActiveTab: Equatable {
     case settings
     case remappings
+    case practice
     case history
     case about
   }
@@ -29,6 +30,7 @@ struct AppFeature {
 		var transcription: TranscriptionFeature.State = .init()
 		var settings: SettingsFeature.State = .init()
 		var history: HistoryFeature.State = .init()
+		var practice: PracticeFeature.State = .init()
 		var activeTab: ActiveTab = .settings
 		@Shared(.hexSettings) var hexSettings: HexSettings
 		@Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
@@ -44,6 +46,7 @@ struct AppFeature {
     case transcription(TranscriptionFeature.Action)
     case settings(SettingsFeature.Action)
     case history(HistoryFeature.Action)
+    case practice(PracticeFeature.Action)
     case setActiveTab(ActiveTab)
     case task
     case pasteLastTranscript
@@ -73,6 +76,10 @@ struct AppFeature {
 
     Scope(state: \.history, action: \.history) {
       HistoryFeature()
+    }
+
+    Scope(state: \.practice, action: \.practice) {
+      PracticeFeature()
     }
 
     Reduce { state, action in
@@ -145,6 +152,9 @@ struct AppFeature {
         state.activeTab = .settings
         return .none
       case .history:
+        return .none
+
+      case .practice:
         return .none
 		case let .setActiveTab(tab):
 			state.activeTab = tab
@@ -288,6 +298,14 @@ struct AppView: View {
         .tag(AppFeature.ActiveTab.remappings)
 
         Button {
+          store.send(.setActiveTab(.practice))
+        } label: {
+          Label("Practice", systemImage: "graduationcap")
+        }
+        .buttonStyle(.plain)
+        .tag(AppFeature.ActiveTab.practice)
+
+        Button {
           store.send(.setActiveTab(.history))
         } label: {
           Label("History", systemImage: "clock")
@@ -316,6 +334,9 @@ struct AppView: View {
       case .remappings:
         WordRemappingsView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Transforms")
+      case .practice:
+        PracticeView(store: store.scope(state: \.practice, action: \.practice))
+          .navigationTitle("Practice")
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")

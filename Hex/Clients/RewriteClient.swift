@@ -9,6 +9,11 @@ struct RewriteClient {
 	/// One chat completion. Throws on HTTP errors, a cut-off answer, or when `endpoint.timeout` passes.
 	var complete: @Sendable (_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage]) async throws -> String
 	var listModels: @Sendable (_ baseURL: String, _ apiKey: String?) async throws -> [String]
+	/// A streamed completion for long answers (OmniRoute cuts non-streamed calls at 30 s). Yields the text
+	/// so far after each chunk; `endpoint.timeout` caps the whole call.
+	var stream: @Sendable (_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> = { _, _, _ in
+		AsyncThrowingStream { $0.finish() }
+	}
 }
 
 extension RewriteClient: DependencyKey {
@@ -50,6 +55,53 @@ extension RewriteClient: DependencyKey {
 			listModels: { baseURL, apiKey in
 				let data = try await fetch(try ChatCompletionAPI.modelsRequest(baseURL: baseURL, apiKey: apiKey))
 				return try ChatCompletionAPI.modelIDs(from: data)
+			},
+			stream: { endpoint, apiKey, messages in
+				AsyncThrowingStream { continuation in
+					let task = Task {
+						do {
+							let effort = endpoint.reasoningEffort.trimmingCharacters(in: .whitespaces)
+							var body = ChatCompletionAPI.Request(
+								model: endpoint.model.trimmingCharacters(in: .whitespaces),
+								messages: messages,
+								reasoningEffort: effort.isEmpty ? nil : effort
+							)
+							body.stream = true
+							let request = try ChatCompletionAPI.chatRequest(
+								baseURL: endpoint.baseURL,
+								apiKey: apiKey,
+								body: body,
+								timeout: endpoint.timeout
+							)
+							try await withDeadline(seconds: endpoint.timeout) {
+								let (bytes, response) = try await session.bytes(for: request)
+								let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+								guard (200 ..< 300).contains(status) else {
+									var body = Data()
+									for try await byte in bytes.prefix(2000) { body.append(byte) }
+									try ChatCompletionAPI.checkStatus(status, data: body)
+									return
+								}
+								var text = ""
+								for try await line in bytes.lines {
+									switch ChatCompletionAPI.streamEvent(fromLine: line) {
+									case let .delta(piece):
+										text += piece
+										continuation.yield(text)
+									case .done:
+										return
+									case .finished, nil:
+										continue
+									}
+								}
+							}
+							continuation.finish()
+						} catch {
+							continuation.finish(throwing: error)
+						}
+					}
+					continuation.onTermination = { _ in task.cancel() }
+				}
 			}
 		)
 	}

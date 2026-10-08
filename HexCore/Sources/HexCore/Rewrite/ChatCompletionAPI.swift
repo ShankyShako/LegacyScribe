@@ -104,6 +104,35 @@ public enum ChatCompletionAPI {
 		return content
 	}
 
+	/// One server-sent-events line of a streamed completion.
+	public enum StreamEvent: Equatable, Sendable {
+		case delta(String)
+		case finished(reason: String)
+		case done
+	}
+
+	/// Parses a `stream: true` line (`data: {...}` or `data: [DONE]`); nil for blank lines, comments and
+	/// chunks with no text (role announcements, reasoning-only deltas).
+	public static func streamEvent(fromLine line: String) -> StreamEvent? {
+		guard line.hasPrefix("data:") else { return nil }
+		let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+		if payload == "[DONE]" { return .done }
+		struct Chunk: Decodable {
+			struct Choice: Decodable {
+				struct Delta: Decodable { var content: String? }
+				var delta: Delta?
+				var finish_reason: String?
+			}
+			var choices: [Choice]
+		}
+		guard let chunk = try? JSONDecoder().decode(Chunk.self, from: Data(payload.utf8)),
+		      let choice = chunk.choices.first
+		else { return nil }
+		if let text = choice.delta?.content, !text.isEmpty { return .delta(text) }
+		if let reason = choice.finish_reason { return .finished(reason: reason) }
+		return nil
+	}
+
 	public static func modelIDs(from data: Data) throws -> [String] {
 		struct Response: Decodable {
 			struct Entry: Decodable { var id: String }
