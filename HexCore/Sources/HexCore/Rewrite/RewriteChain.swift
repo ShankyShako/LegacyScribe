@@ -56,6 +56,7 @@ public enum RewriteChain {
 		mode: RewriteMode,
 		vocabulary: [String],
 		targetAppName: String?,
+		instructions: String? = nil,
 		endpoints: [(RewriteEndpointRole, RewriteEndpoint)],
 		complete: Complete
 	) async -> RewriteOutcome {
@@ -64,7 +65,8 @@ public enum RewriteChain {
 			mode: mode,
 			transcript: transcript,
 			vocabulary: vocabulary,
-			targetAppName: targetAppName
+			targetAppName: targetAppName,
+			instructions: instructions
 		) else { return outcome }
 
 		for (role, endpoint) in endpoints where endpoint.isConfigured {

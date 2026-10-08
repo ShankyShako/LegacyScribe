@@ -76,6 +76,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var rewriteModeShortcutsEnabled: Bool
 	/// Terms the LLM should spell exactly (names, products, jargon).
 	public var vocabulary: [String]
+	/// The user's own instructions per mode, keyed by `RewriteMode.rawValue`; a missing mode uses the built-in default.
+	public var rewriteInstructions: [String: String]
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -115,7 +117,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		rewriteFallback: RewriteEndpoint = HexSettings.defaultRewriteFallback,
 		rewriteFallbackEnabled: Bool = true,
 		rewriteModeShortcutsEnabled: Bool = true,
-		vocabulary: [String] = []
+		vocabulary: [String] = [],
+		rewriteInstructions: [String: String] = [:]
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -149,6 +152,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.rewriteFallbackEnabled = rewriteFallbackEnabled
 		self.rewriteModeShortcutsEnabled = rewriteModeShortcutsEnabled
 		self.vocabulary = vocabulary
+		self.rewriteInstructions = rewriteInstructions
 		normalizeDoubleTapSettings()
 	}
 
@@ -205,6 +209,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case rewriteFallbackEnabled
 	case rewriteModeShortcutsEnabled
 	case vocabulary
+	case rewriteInstructions
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -345,6 +350,27 @@ private enum HexSettingsSchema {
 		SettingsField(.rewriteFallback, keyPath: \.rewriteFallback, default: defaults.rewriteFallback).eraseToAny(),
 		SettingsField(.rewriteFallbackEnabled, keyPath: \.rewriteFallbackEnabled, default: defaults.rewriteFallbackEnabled).eraseToAny(),
 		SettingsField(.rewriteModeShortcutsEnabled, keyPath: \.rewriteModeShortcutsEnabled, default: defaults.rewriteModeShortcutsEnabled).eraseToAny(),
-		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny()
+		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny(),
+		SettingsField(.rewriteInstructions, keyPath: \.rewriteInstructions, default: defaults.rewriteInstructions).eraseToAny()
 	]
+}
+
+extension HexSettings {
+	/// The user's instructions for `mode`, or nil to use the built-in default.
+	public func customInstructions(for mode: RewriteMode) -> String? {
+		guard let text = rewriteInstructions[mode.rawValue],
+		      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+		return text
+	}
+
+	/// Stores `text` for `mode`; blank text or the built-in default clears the override,
+	/// so later improvements to the default still reach the user.
+	public mutating func setCustomInstructions(_ text: String?, for mode: RewriteMode) {
+		let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+		if trimmed.isEmpty || trimmed == RewritePromptBuilder.taskInstructions(for: mode) {
+			rewriteInstructions[mode.rawValue] = nil
+		} else {
+			rewriteInstructions[mode.rawValue] = text
+		}
+	}
 }

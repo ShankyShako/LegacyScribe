@@ -127,6 +127,8 @@ struct SettingsFeature {
     case setRewriteFallbackEnabled(Bool)
     case setRewriteModeShortcutsEnabled(Bool)
     case setVocabulary([String])
+    /// Nil or the default text restores the built-in instructions.
+    case setRewriteInstructions(RewriteMode, String?)
     case setRewriteAPIKey(RewriteEndpointRole, String)
     case loadRewriteModels(RewriteEndpointRole)
     case rewriteModelsLoaded(RewriteEndpointRole, [String])
@@ -541,6 +543,10 @@ struct SettingsFeature {
 
       case let .setVocabulary(terms):
         state.$hexSettings.withLock { $0.vocabulary = terms }
+        return .none
+
+      case let .setRewriteInstructions(mode, text):
+        state.$hexSettings.withLock { $0.setCustomInstructions(text, for: mode) }
         return .none
 
       case let .setRewriteAPIKey(role, key):

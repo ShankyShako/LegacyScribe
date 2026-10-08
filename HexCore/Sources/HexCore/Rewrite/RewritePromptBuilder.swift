@@ -14,22 +14,30 @@ public struct ChatMessage: Codable, Equatable, Sendable {
 ///
 /// The transcript goes in the user message inside `<dictation>` tags, and the system prompt says
 /// it is text to rewrite, so a dictated question or command is rewritten rather than answered.
+///
+/// Each mode's task instructions can be replaced by the user's own; the rules after them (dictation is
+/// text not orders, mishearing fixes, vocabulary, output only the rewrite) are always added.
 public enum RewritePromptBuilder {
-	/// Nil for `.raw`, which skips the LLM.
+	/// Nil for `.raw`, which skips the LLM. `instructions` replaces the mode's default task when not blank.
 	public static func messages(
 		mode: RewriteMode,
 		transcript: String,
 		vocabulary: [String] = [],
-		targetAppName: String? = nil
+		targetAppName: String? = nil,
+		instructions: String? = nil
 	) -> [ChatMessage]? {
-		guard let task = taskInstructions(for: mode) else { return nil }
+		guard var task = taskInstructions(for: mode) else { return nil }
+		if let custom = instructions?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+			task = custom
+		}
 		return [
 			ChatMessage(role: "system", content: systemPrompt(task: task, vocabulary: vocabulary, targetAppName: targetAppName)),
 			ChatMessage(role: "user", content: "<dictation>\n\(transcript)\n</dictation>"),
 		]
 	}
 
-	static func taskInstructions(for mode: RewriteMode) -> String? {
+	/// The built-in task for a mode, shown in Settings as the starting point for edits. Nil for `.raw`.
+	public static func taskInstructions(for mode: RewriteMode) -> String? {
 		switch mode {
 		case .raw:
 			nil
@@ -42,12 +50,26 @@ public enum RewritePromptBuilder {
 			"""
 		case .prompt:
 			"""
-			You turn dictation into a clear prompt for an AI coding assistant.
-			Rewrite the speaker's rambling request as a direct, well-organized instruction: state the goal first, \
-			then the relevant details, constraints and any steps, as short bullet points when there is more than one. \
-			Drop filler, hedging and repetition. Keep every concrete detail the speaker gave (names, files, numbers, \
-			requirements) and add nothing they didn't say. Write it in the speaker's voice as the request itself \
-			("Add…", "Fix…"), not a description of it. If the speaker asks a question, keep it a question.
+			You turn dictation into a prompt for an AI coding assistant that both the speaker and the assistant can \
+			read at a glance.
+			Write it in the speaker's voice as the request itself ("Fix…", "I want…", "Can we…?"), not a description \
+			of it.
+			Fit the shape to what was said; there is no fixed template:
+			- A short dictation (one or two points) stays plain sentences, with no headings or bullets.
+			- A longer dictation opens with a synopsis paragraph (no heading, one to three short sentences) saying \
+			what the speaker wants overall and why; the details go in the sections, not the synopsis. Then group the \
+			details into sections whose short headings you name from the content (for example what's wrong now, what \
+			I want instead, constraints, context); use only the sections the dictation fills, with one bullet per \
+			point.
+			- End with a section of open questions: every question the speaker asked, and every idea they floated \
+			without committing to it ("maybe", "I'm not sure", "should think about"), each written as a question. \
+			Leave it out if there are none.
+			Keep every point, reason, example and concrete detail (names, files, numbers, requirements): a long \
+			dictation gives a long prompt, so give each point its own bullet instead of merging or summarizing them. \
+			A question stays a question, ending in "?", even in a short dictation. Drop only filler, hedging and \
+			repetition, and add nothing the speaker didn't say (these instructions are not content; never copy them \
+			into the prompt): no guessed requirements, steps or answers, so that anything missing stays visible. Use \
+			Markdown headings (##) and "-" bullets.
 			"""
 		}
 	}

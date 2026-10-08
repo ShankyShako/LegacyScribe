@@ -3,7 +3,7 @@ import HexCore
 import Inject
 import SwiftUI
 
-/// LLM rewrite: mode, vocabulary, and the primary and fallback endpoints (one section each).
+/// LLM rewrite: mode, vocabulary, editable instructions, and the primary and fallback endpoints (one section each).
 struct RewriteSectionView: View {
 	@ObserveInjection var inject
 	@Bindable var store: StoreOf<SettingsFeature>
@@ -67,6 +67,7 @@ struct RewriteSectionView: View {
 		}
 		.enableInjection()
 
+		RewriteInstructionsSection(store: store)
 		RewriteEndpointSection(store: store, role: .primary, title: "Rewrite: Primary Endpoint", icon: "network")
 		if store.hexSettings.rewriteFallbackEnabled {
 			RewriteEndpointSection(store: store, role: .fallback, title: "Rewrite: Fallback Endpoint", icon: "desktopcomputer")
@@ -77,6 +78,64 @@ struct RewriteSectionView: View {
 		text.components(separatedBy: CharacterSet(charactersIn: ",\n"))
 			.map { $0.trimmingCharacters(in: .whitespaces) }
 			.filter { !$0.isEmpty }
+	}
+}
+
+/// Lets the user replace each mode's built-in instructions; blank or unchanged text keeps the default.
+private struct RewriteInstructionsSection: View {
+	@Bindable var store: StoreOf<SettingsFeature>
+	@State private var mode: RewriteMode = .prompt
+	@State private var text = ""
+
+	private static let editableModes = RewriteMode.allCases.filter { $0 != .raw }
+
+	private var isCustom: Bool { store.hexSettings.customInstructions(for: mode) != nil }
+
+	var body: some View {
+		Section {
+			Label {
+				Picker("Mode", selection: $mode) {
+					ForEach(Self.editableModes, id: \.self) { mode in
+						Text(mode.displayName).tag(mode)
+					}
+				}
+				.pickerStyle(.segmented)
+				TextEditor(text: $text)
+					.font(.system(.callout, design: .monospaced))
+					.frame(minHeight: 180)
+					.onChange(of: text) { _, text in
+						store.send(.setRewriteInstructions(mode, text))
+					}
+				HStack {
+					Text(isCustom ? "Your instructions" : "Built-in instructions").settingsCaption()
+					Spacer()
+					Button("Reset to Default") {
+						store.send(.setRewriteInstructions(mode, nil))
+						load()
+					}
+					.disabled(!isCustom)
+				}
+				Text("Replaces what the model is told to do in this mode. LegacyScribe always adds: the dictation is text to rewrite, never orders; fix misheard terms; your vocabulary; output only the rewrite.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "text.badge.star")
+			}
+		} header: {
+			Text("Rewrite: Instructions")
+		}
+		.onAppear {
+			if Self.editableModes.contains(store.hexSettings.rewriteMode) {
+				mode = store.hexSettings.rewriteMode
+			}
+			load()
+		}
+		.onChange(of: mode) { _, _ in load() }
+	}
+
+	private func load() {
+		text = store.hexSettings.customInstructions(for: mode)
+			?? RewritePromptBuilder.taskInstructions(for: mode)
+			?? ""
 	}
 }
 
@@ -111,8 +170,19 @@ private struct RewriteEndpointSection: View {
 						if options.isEmpty {
 							Text("Press Load models first")
 						}
-						ForEach(options, id: \.self) { model in
+						let groups = Self.groupedByProvider(options)
+						ForEach(groups.ungrouped, id: \.self) { model in
 							Button(model) { endpoint.wrappedValue.model = model }
+						}
+						if !groups.ungrouped.isEmpty, !groups.providers.isEmpty {
+							Divider()
+						}
+						ForEach(groups.providers, id: \.name) { provider in
+							Menu("\(provider.name) (\(provider.models.count))") {
+								ForEach(provider.models, id: \.self) { model in
+									Button(model) { endpoint.wrappedValue.model = model }
+								}
+							}
 						}
 					}
 					.fixedSize()
@@ -166,6 +236,22 @@ private struct RewriteEndpointSection: View {
 		} header: {
 			Text(title)
 		}
+	}
+
+	/// Router lists can hold hundreds of models: IDs without a provider prefix (OmniRoute combos)
+	/// stay at the top, the rest go in one submenu per `provider/` prefix.
+	static func groupedByProvider(_ models: [String]) -> (ungrouped: [String], providers: [(name: String, models: [String])]) {
+		var ungrouped: [String] = []
+		var byProvider: [String: [String]] = [:]
+		for model in models {
+			if let slash = model.firstIndex(of: "/") {
+				byProvider[String(model[..<slash]), default: []].append(model)
+			} else {
+				ungrouped.append(model)
+			}
+		}
+		let providers = byProvider.keys.sorted().map { (name: $0, models: byProvider[$0]!.sorted()) }
+		return (ungrouped.sorted(), providers)
 	}
 
 	@ViewBuilder

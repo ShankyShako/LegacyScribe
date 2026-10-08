@@ -577,6 +577,7 @@ private extension TranscriptionFeature {
       mode: mode,
       vocabulary: settings.vocabulary,
       targetAppName: targetAppName,
+      instructions: settings.customInstructions(for: mode),
       endpoints: endpoints
     ) { [rewrite, keychain] role, endpoint, messages in
       try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)
