@@ -20,14 +20,16 @@ public struct ChatMessage: Codable, Equatable, Sendable {
 public enum RewritePromptBuilder {
 	/// Nil for `.raw`, which skips the LLM. `instructions` replaces the mode's default task when not blank.
 	/// `codeTalkCommands` (slash command names) turns on `CodeTalk` rules in Prompt mode, after the task,
-	/// so they survive custom instructions.
+	/// so they survive custom instructions. `existingText` (Prompt mode) asks for the dictation merged into
+	/// the field's current text (`FieldMerge`).
 	public static func messages(
 		mode: RewriteMode,
 		transcript: String,
 		vocabulary: [String] = [],
 		targetAppName: String? = nil,
 		instructions: String? = nil,
-		codeTalkCommands: [String]? = nil
+		codeTalkCommands: [String]? = nil,
+		existingText: String? = nil
 	) -> [ChatMessage]? {
 		guard var task = taskInstructions(for: mode) else { return nil }
 		if let custom = instructions?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
@@ -36,9 +38,14 @@ public enum RewritePromptBuilder {
 		if mode == .prompt, let codeTalkCommands {
 			task += "\n" + CodeTalk.instructions(slashCommands: codeTalkCommands)
 		}
+		var user = "<dictation>\n\(transcript)\n</dictation>"
+		if mode == .prompt, let existingText {
+			task += "\n" + FieldMerge.instructions
+			user = FieldMerge.userMessage(existing: existingText, transcript: transcript)
+		}
 		return [
 			ChatMessage(role: "system", content: systemPrompt(task: task, vocabulary: vocabulary, targetAppName: targetAppName)),
-			ChatMessage(role: "user", content: "<dictation>\n\(transcript)\n</dictation>"),
+			ChatMessage(role: "user", content: user),
 		]
 	}
 

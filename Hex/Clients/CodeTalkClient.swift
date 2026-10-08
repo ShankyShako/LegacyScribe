@@ -20,7 +20,7 @@ extension CodeTalkClient: DependencyKey {
 		})
 	}
 
-	static var testValue: Self { Self() }
+	static var testValue: Self { Self(slashCommands: { [] }) }
 }
 
 extension DependencyValues {

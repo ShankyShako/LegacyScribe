@@ -82,6 +82,13 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var codeTalkEnabled: Bool
 	/// Hold ⌃ and press ⌥ to cycle modes, like ⌘-Tab (`ModeCycler`).
 	public var modeCyclerEnabled: Bool
+	/// Prompt mode merges a dictation into the text already in the focused field (`FieldMerge`).
+	public var mergeIntoFieldEnabled: Bool
+	/// Remember what each dictation became when Enter was pressed (`SentEdit`), read through Accessibility.
+	public var captureSentEdits: Bool
+	/// Model (on the primary endpoint) that answers the Practice tab's research question; it should be able
+	/// to search the web, e.g. an OmniRoute search combo.
+	public var practiceResearchModel: String
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -124,7 +131,10 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		vocabulary: [String] = [],
 		rewriteInstructions: [String: String] = [:],
 		codeTalkEnabled: Bool = true,
-		modeCyclerEnabled: Bool = true
+		modeCyclerEnabled: Bool = true,
+		mergeIntoFieldEnabled: Bool = true,
+		captureSentEdits: Bool = true,
+		practiceResearchModel: String = "wp-search"
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -161,6 +171,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.rewriteInstructions = rewriteInstructions
 		self.codeTalkEnabled = codeTalkEnabled
 		self.modeCyclerEnabled = modeCyclerEnabled
+		self.mergeIntoFieldEnabled = mergeIntoFieldEnabled
+		self.captureSentEdits = captureSentEdits
+		self.practiceResearchModel = practiceResearchModel
 		normalizeDoubleTapSettings()
 	}
 
@@ -220,6 +233,9 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case rewriteInstructions
 	case codeTalkEnabled
 	case modeCyclerEnabled
+	case mergeIntoFieldEnabled
+	case captureSentEdits
+	case practiceResearchModel
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -363,7 +379,10 @@ private enum HexSettingsSchema {
 		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny(),
 		SettingsField(.rewriteInstructions, keyPath: \.rewriteInstructions, default: defaults.rewriteInstructions).eraseToAny(),
 		SettingsField(.codeTalkEnabled, keyPath: \.codeTalkEnabled, default: defaults.codeTalkEnabled).eraseToAny(),
-		SettingsField(.modeCyclerEnabled, keyPath: \.modeCyclerEnabled, default: defaults.modeCyclerEnabled).eraseToAny()
+		SettingsField(.modeCyclerEnabled, keyPath: \.modeCyclerEnabled, default: defaults.modeCyclerEnabled).eraseToAny(),
+		SettingsField(.mergeIntoFieldEnabled, keyPath: \.mergeIntoFieldEnabled, default: defaults.mergeIntoFieldEnabled).eraseToAny(),
+		SettingsField(.captureSentEdits, keyPath: \.captureSentEdits, default: defaults.captureSentEdits).eraseToAny(),
+		SettingsField(.practiceResearchModel, keyPath: \.practiceResearchModel, default: defaults.practiceResearchModel).eraseToAny()
 	]
 }
 

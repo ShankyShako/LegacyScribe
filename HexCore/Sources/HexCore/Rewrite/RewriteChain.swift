@@ -58,6 +58,7 @@ public enum RewriteChain {
 		targetAppName: String?,
 		instructions: String? = nil,
 		codeTalkCommands: [String]? = nil,
+		existingText: String? = nil,
 		endpoints: [(RewriteEndpointRole, RewriteEndpoint)],
 		complete: Complete
 	) async -> RewriteOutcome {
@@ -68,14 +69,15 @@ public enum RewriteChain {
 			vocabulary: vocabulary,
 			targetAppName: targetAppName,
 			instructions: instructions,
-			codeTalkCommands: codeTalkCommands
+			codeTalkCommands: codeTalkCommands,
+			existingText: existingText
 		) else { return outcome }
 
 		for (role, endpoint) in endpoints where endpoint.isConfigured {
 			if Task.isCancelled { break }
 			do {
 				let output = RewriteOutputSanitizer.sanitize(try await complete(role, endpoint, messages))
-				if let problem = rejection(of: output, transcript: transcript) {
+				if let problem = rejection(of: output, transcript: transcript, existingText: existingText) {
 					outcome.failures.append("\(role.rawValue) \(endpoint.model): \(problem)")
 					continue
 				}
@@ -90,10 +92,15 @@ public enum RewriteChain {
 	}
 
 	/// A rewrite far longer than the dictation means the model answered it instead of rewriting it.
-	static func rejection(of output: String, transcript: String) -> String? {
+	/// A merge must also keep the field's existing text.
+	static func rejection(of output: String, transcript: String, existingText: String? = nil) -> String? {
 		if output.isEmpty { return "empty rewrite" }
-		if output.count > transcript.count * 4 + 400 {
+		let budget = transcript.count * 4 + 400 + (existingText?.count ?? 0)
+		if output.count > budget {
 			return "rewrite is \(output.count) characters for a \(transcript.count)-character dictation"
+		}
+		if let existingText {
+			return FieldMerge.rejection(of: output, existing: existingText)
 		}
 		return nil
 	}

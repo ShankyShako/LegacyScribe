@@ -128,6 +128,8 @@ struct SettingsFeature {
     case setRewriteModeShortcutsEnabled(Bool)
     case setCodeTalkEnabled(Bool)
     case setModeCyclerEnabled(Bool)
+    case setMergeIntoFieldEnabled(Bool)
+    case setCaptureSentEdits(Bool)
     case setVocabulary([String])
     /// Nil or the default text restores the built-in instructions.
     case setRewriteInstructions(RewriteMode, String?)
@@ -541,6 +543,14 @@ struct SettingsFeature {
 
       case let .setRewriteModeShortcutsEnabled(enabled):
         state.$hexSettings.withLock { $0.rewriteModeShortcutsEnabled = enabled }
+        return .none
+
+      case let .setMergeIntoFieldEnabled(enabled):
+        state.$hexSettings.withLock { $0.mergeIntoFieldEnabled = enabled }
+        return .none
+
+      case let .setCaptureSentEdits(enabled):
+        state.$hexSettings.withLock { $0.captureSentEdits = enabled }
         return .none
 
       case let .setModeCyclerEnabled(enabled):

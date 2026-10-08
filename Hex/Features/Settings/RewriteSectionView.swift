@@ -49,6 +49,17 @@ struct RewriteSectionView: View {
 			}
 
 			Label {
+				Toggle("Merge into the text already in the field", isOn: Binding(
+					get: { store.hexSettings.mergeIntoFieldEnabled },
+					set: { store.send(.setMergeIntoFieldEnabled($0)) }
+				))
+				Text("Prompt mode: when the text box already holds a prompt, “add cheesecake” becomes one more bullet in it instead of a second prompt. The merged text replaces the box (⌘Z undoes it). Not in terminals.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "arrow.triangle.merge")
+			}
+
+			Label {
 				Toggle("Code talk in Prompt mode", isOn: Binding(
 					get: { store.hexSettings.codeTalkEnabled },
 					set: { store.send(.setCodeTalkEnabled($0)) }

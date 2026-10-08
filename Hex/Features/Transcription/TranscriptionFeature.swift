@@ -88,6 +88,7 @@ struct TranscriptionFeature {
   @Dependency(\.rewrite) var rewrite
   @Dependency(\.keychain) var keychain
   @Dependency(\.codeTalk) var codeTalk
+  @Dependency(\.focusedText) var focusedText
 
   var body: some ReducerOf<Self> {
     Reduce { state, action in
@@ -103,6 +104,7 @@ struct TranscriptionFeature {
           startMeteringEffect(),
           startHotKeyMonitoringEffect(),
           startModeCyclerEffect(),
+          startSentEditCaptureEffect(),
           warmUpRecorderEffect()
         )
 
@@ -189,6 +191,46 @@ private extension TranscriptionFeature {
       }
     }
     .cancellable(id: CancelID.metering, cancelInFlight: true)
+  }
+
+  /// On Enter (or ⌘Enter) in the field of the last paste, reads the field before the app handles the key
+  /// and stores the pasted stretch as sent (`SentEdit`). Shift-Enter is a newline in chat apps, so it's ignored.
+  func startSentEditCaptureEffect() -> Effect<Action> {
+    .run { [focusedText] _ in
+      @Shared(.pendingSentEdit) var pendingSentEdit: PendingSentEdit?
+      @Shared(.sentEdits) var sentEdits: SentEditLog
+
+      let token = keyEventMonitor.handleKeyEvent { keyEvent in
+        guard keyEvent.key == .return || keyEvent.key == .keypadEnter,
+              keyEvent.modifiers.isEmpty || keyEvent.modifiers.matchesExactly([.command]),
+              let pending = pendingSentEdit
+        else { return false }
+        let date = Date()
+        if pending.isExpired(at: date) {
+          $pendingSentEdit.withLock { $0 = nil }
+          return false
+        }
+        // Runs inside the event tap, before the app sees Enter, so the field still holds the message.
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == pending.bundleID,
+              let field = focusedText.read(), field.bundleID == pending.bundleID,
+              let edit = pending.sentEdit(finalField: field.value, at: date)
+        else { return false } // Another field or unreadable: keep waiting for the right Enter.
+        $pendingSentEdit.withLock { $0 = nil }
+        Task { @MainActor in
+          $sentEdits.withLock { $0.edits.append(edit) }
+        }
+        HexLog.learning.info("Captured sent text (edited: \(edit.wasEdited, privacy: .public)) in \(pending.bundleID, privacy: .public)")
+        return false
+      }
+
+      await withTaskCancellationHandler {
+        while !Task.isCancelled {
+          try? await Task.sleep(for: .seconds(60))
+        }
+      } onCancel: {
+        token.cancel()
+      }
+    }
   }
 
   /// Feeds key events to `ModeCycler` (hold ⌃, press ⌥ to cycle modes) and ticks its auto-advance while
@@ -610,6 +652,14 @@ private extension TranscriptionFeature {
         }
       }
 
+      // Merge: a Prompt dictation joins the text already in the field instead of being pasted after it.
+      var mergeBase: String?
+      if rewriteMode == .prompt, settings.mergeIntoFieldEnabled, leadingCommand == nil, !output.isEmpty,
+         let field = focusedText.read(), field.bundleID == sourceAppBundleID {
+        mergeBase = FieldMerge.existingText(field.value, bundleID: field.bundleID)
+      }
+      var replaceField = false
+
       if rewriteMode != .raw, !output.isEmpty {
         await send(.rewriteStateChanged(true))
         let outcome = await rewriteTranscript(
@@ -617,7 +667,8 @@ private extension TranscriptionFeature {
           mode: rewriteMode,
           settings: settings,
           targetAppName: sourceAppName,
-          codeTalkCommands: codeTalkCommands
+          codeTalkCommands: codeTalkCommands,
+          existingText: mergeBase
         )
         await send(.rewriteStateChanged(false))
         timeline.rewritten = stampLatency("rewritten")
@@ -626,9 +677,13 @@ private extension TranscriptionFeature {
           return
         }
         rewriteOutcome = outcome
-        if outcome.rewrittenBy != nil {
+        if outcome.rewrittenBy != nil, let mergeBase, !fieldStillHolds(mergeBase) {
+          // The field changed while the LLM worked; pasting the merge over it would lose that.
+          HexLog.rewrite.notice("Field changed during the merge; pasting the transcript at the cursor")
+        } else if outcome.rewrittenBy != nil {
           output = outcome.text
           appliedRewrite = rewriteMode
+          replaceField = mergeBase != nil
         } else if !outcome.failures.isEmpty {
           await send(.rewriteFellBack)
         }
@@ -660,6 +715,8 @@ private extension TranscriptionFeature {
           rawText: appliedRewrite == nil && leadingCommand == nil ? nil : result,
           rewriteMode: appliedRewrite,
           rewriteOutcome: rewriteOutcome,
+          recognized: result,
+          replaceField: replaceField,
           duration: duration,
           sourceAppBundleID: sourceAppBundleID,
           sourceAppName: sourceAppName,
@@ -700,7 +757,8 @@ private extension TranscriptionFeature {
     mode: RewriteMode,
     settings: HexSettings,
     targetAppName: String?,
-    codeTalkCommands: [String]? = nil
+    codeTalkCommands: [String]? = nil,
+    existingText: String? = nil
   ) async -> RewriteOutcome {
     var endpoints: [(RewriteEndpointRole, RewriteEndpoint)] = [(.primary, settings.rewritePrimary)]
     if settings.rewriteFallbackEnabled {
@@ -713,6 +771,7 @@ private extension TranscriptionFeature {
       targetAppName: targetAppName,
       instructions: settings.customInstructions(for: mode),
       codeTalkCommands: codeTalkCommands,
+      existingText: existingText,
       endpoints: endpoints
     ) { [rewrite, keychain] role, endpoint, messages in
       try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)
@@ -750,6 +809,8 @@ private extension TranscriptionFeature {
     rawText: String?,
     rewriteMode: RewriteMode?,
     rewriteOutcome: RewriteOutcome?,
+    recognized: String,
+    replaceField: Bool,
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
@@ -795,6 +856,11 @@ private extension TranscriptionFeature {
 
     timeline.postProcessed = stampLatency("postProcessed")
 
+    let fieldBeforePaste = hexSettings.captureSentEdits ? focusedText.read() : nil
+    if replaceField {
+      // Select the field's text so the merged version replaces it (⌘Z in the app undoes this).
+      await pasteboard.sendKeyboardCommand(KeyboardCommand(key: .a, modifiers: [.command]))
+    }
     await pasteboard.paste(result)
     timeline.pasted = stampLatency("pasted")
     soundEffect.play(.pasteTranscript)
@@ -809,6 +875,59 @@ private extension TranscriptionFeature {
           history.history[index].latency = latency
         }
       }
+    }
+
+    if let fieldBeforePaste {
+      await watchForSend(
+        fieldBefore: fieldBeforePaste,
+        pasted: result,
+        recognized: recognized,
+        mode: rewriteMode,
+        transcriptID: savedTranscriptID,
+        appName: sourceAppName
+      )
+    }
+  }
+
+  /// True when the focused field still holds `text` (trimmed), so it can be replaced safely.
+  func fieldStillHolds(_ text: String) -> Bool {
+    focusedText.read()?.value.trimmingCharacters(in: .whitespacesAndNewlines) == text
+  }
+
+  /// Waits for the paste to land, then remembers the field so Enter can capture the sent version.
+  func watchForSend(
+    fieldBefore: FocusedText,
+    pasted: String,
+    recognized: String,
+    mode: RewriteMode?,
+    transcriptID: UUID?,
+    appName: String?
+  ) async {
+    guard let bundleID = fieldBefore.bundleID, !FieldMerge.terminalBundleIDs.contains(bundleID) else { return }
+    var fieldAfter: FocusedText?
+    for _ in 0 ..< 10 {
+      try? await Task.sleep(for: .milliseconds(100))
+      guard !Task.isCancelled else { return }
+      fieldAfter = focusedText.read()
+      if let fieldAfter, fieldAfter.value != fieldBefore.value { break }
+    }
+    guard let fieldAfter, fieldAfter.bundleID == bundleID, fieldAfter.value != fieldBefore.value else {
+      HexLog.learning.info("Paste not visible in the focused field of \(bundleID, privacy: .public); not watching for Enter")
+      return
+    }
+    @Shared(.pendingSentEdit) var pendingSentEdit: PendingSentEdit?
+    $pendingSentEdit.withLock {
+      $0 = PendingSentEdit(
+        startedAt: now,
+        transcriptID: transcriptID,
+        bundleID: bundleID,
+        appName: appName,
+        mode: mode,
+        recognized: recognized,
+        pasted: pasted,
+        fieldBefore: fieldBefore.value,
+        fieldAfterPaste: fieldAfter.value
+      )
     }
   }
 
