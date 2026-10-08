@@ -54,7 +54,9 @@ actor CohereClient {
   func transcribe(_ url: URL) throws -> String {
     guard let model else { throw CohereError.notLoaded }
     let samples = try converter.resampleAudioFile(url)
+    // Chunk transcripts come back joined by newlines; they're one dictation.
     return model.generate(audio: MLXArray(samples), generationParameters: Self.parameters).text
+      .replacingOccurrences(of: "\n", with: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
@@ -70,7 +72,11 @@ actor CohereClient {
     }
   }
 
-  private static let parameters = STTGenerateParameters(language: "en")
+  /// Cohere was trained on clips up to 35 s (`max_audio_clip_s`); fed a longer one in a single pass it drops
+  /// most of the speech and loops on a sentence. The splitter cuts at the quietest point within ±5 s of each
+  /// 25 s mark, so every chunk stays at or under 30 s.
+  static let chunkSeconds: Float = 25
+  private static let parameters = STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
 
   private func directory(for variant: CohereModel) throws -> URL {
     try URL.hexMLXModelsDirectory.appendingPathComponent(variant.repository, isDirectory: true)

@@ -2,7 +2,7 @@ import Darwin
 import FluidAudio
 import Foundation
 
-// lsbench --engine <id> --fixtures <dir> [--runs N] [--json out.json]
+// lsbench --engine <id> --fixtures <dir> [--runs N] [--json out.json] [--cohere-chunk SECONDS]
 //
 // Engines:
 //   cohere:<model-dir>            Cohere Transcribe via mlx-audio-swift, loaded from a local MLX checkpoint
@@ -50,13 +50,15 @@ func machineName() -> String {
     return "\(String(cString: buffer)) \(memGB)GB macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
 }
 
-func makeEngine(_ spec: String) throws -> BenchEngine {
+func makeEngine(_ spec: String, cohereChunkSeconds: Float?) throws -> BenchEngine {
     let modelsRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/LegacyScribe/Models/fluidaudio")
     let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
     switch (parts.first, parts.count > 1 ? parts[1] : nil) {
     case ("cohere", let dir?):
-        return CohereMLXEngine(modelDir: URL(fileURLWithPath: (dir as NSString).expandingTildeInPath))
+        let modelDir = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
+        if let cohereChunkSeconds { return CohereMLXEngine(modelDir: modelDir, chunkSeconds: cohereChunkSeconds) }
+        return CohereMLXEngine(modelDir: modelDir)
     case ("parakeet", "v2"): return ParakeetEngine(version: .v2, label: "v2", modelsRoot: modelsRoot)
     case ("parakeet", "v3"): return ParakeetEngine(version: .v3, label: "v3", modelsRoot: modelsRoot)
     case ("parakeet", "ultra"): return ParakeetEngine(version: .ultra, label: "ultra", modelsRoot: modelsRoot)
@@ -82,6 +84,7 @@ func run() async throws {
     }
     let runs = option("--runs").flatMap(Int.init) ?? 3
     let jsonPath = option("--json")
+    let cohereChunkSeconds = option("--cohere-chunk").flatMap(Float.init)
 
     let fixturesDir = URL(fileURLWithPath: (fixturesPath as NSString).expandingTildeInPath)
     let audioFiles = try FileManager.default.contentsOfDirectory(at: fixturesDir, includingPropertiesForKeys: nil)
@@ -95,7 +98,7 @@ func run() async throws {
         return (url.deletingPathExtension().lastPathComponent, try converter.resampleAudioFile(url), reference)
     }
 
-    let engine = try makeEngine(engineSpec)
+    let engine = try makeEngine(engineSpec, cohereChunkSeconds: cohereChunkSeconds)
     FileHandle.standardError.write("loading \(engine.name)…\n".data(using: .utf8)!)
     let loadStart = ContinuousClock.now
     try await engine.load(warmup: Array(clips[0].samples.prefix(16_000 * 3)))

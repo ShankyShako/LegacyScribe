@@ -27,6 +27,7 @@ F="$HOME/Library/Application Support/LegacyScribe/fixtures/say"
 M="$HOME/Library/Application Support/LegacyScribe/Models/mlx/beshkenadze"
 
 lsbench --engine "cohere:$M/cohere-transcribe-03-2026-mlx-4bit" --fixtures "$F" --runs 5 --json cohere-4bit.json
+# Cohere audio is split into ~25 s chunks like the app; --cohere-chunk 1200 reproduces the old single-pass behaviour
 lsbench --engine parakeet:v3 --fixtures "$F"        # also: parakeet:v2, parakeet:ultra, parakeet:phonon2
 ```
 

@@ -14,10 +14,13 @@ protocol BenchEngine {
 final class CohereMLXEngine: BenchEngine {
     let name: String
     private let modelDir: URL
+    private let chunkSeconds: Float
     private var model: CohereTranscribeModel?
 
-    init(modelDir: URL) {
+    /// `chunkSeconds` matches the app's `CohereClient.chunkSeconds`; Cohere loses speech on clips over 35 s.
+    init(modelDir: URL, chunkSeconds: Float = 25) {
         self.modelDir = modelDir
+        self.chunkSeconds = chunkSeconds
         self.name = "cohere-mlx:\(modelDir.lastPathComponent)"
     }
 
@@ -30,9 +33,9 @@ final class CohereMLXEngine: BenchEngine {
         guard let model else { throw BenchError.notLoaded }
         let output = model.generate(
             audio: MLXArray(samples),
-            generationParameters: STTGenerateParameters(language: "en")
+            generationParameters: STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
         )
-        return output.text
+        return output.text.replacingOccurrences(of: "\n", with: " ")
     }
 }
 

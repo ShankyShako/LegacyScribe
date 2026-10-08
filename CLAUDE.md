@@ -27,6 +27,7 @@ Before writing an STT engine adapter, read `docs/research/engines.md` (verified 
 | A `finish_reason: length` answer is a failure, and a rewrite over 4× the dictation + 400 chars is rejected | A cut-off rewrite or a model answering the dictation instead of rewriting it must not be pasted |
 | API keys in the Keychain (service `com.genovamongalo.LegacyScribe.rewrite`, account `apiKey.<role>`), never in `hex_settings.json` | Settings JSON is plain text |
 | Cohere Transcribe 4-bit is an app engine (`CohereClient`, mlx-audio-swift @ `dbe5eaac964e`), listed first as "most accurate (English)"; fresh installs still default to Parakeet v3 | Best WER on the user's voice (5.3% vs 8–9%) at ~320 ms per 10 s. Parakeet stays the default because Cohere is a 1.4 GB download and keeps ~2 GB resident |
+| Cohere audio is split into ~25 s chunks (`CohereClient.chunkSeconds`, cut at the quietest point within ±5 s, so ≤30 s each); lsbench does the same (`--cohere-chunk` to override) | The model was trained on clips up to 35 s (`max_audio_clip_s`). A 121 s dictation in one pass came back as 96 words with one sentence looped 3×; chunked it gave all 161 words at the same speed (2.9 s) |
 
 ## Layout and naming
 
