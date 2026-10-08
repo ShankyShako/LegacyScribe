@@ -77,6 +77,7 @@ struct TranscriptionFeature {
   @Dependency(\.transcriptPersistence) var transcriptPersistence
   @Dependency(\.rewrite) var rewrite
   @Dependency(\.keychain) var keychain
+  @Dependency(\.codeTalk) var codeTalk
 
   var body: some ReducerOf<Self> {
     Reduce { state, action in
@@ -488,9 +489,29 @@ private extension TranscriptionFeature {
       var appliedRewrite: RewriteMode?
       var rewriteOutcome: RewriteOutcome?
 
+      // Code talk: a leading "slash <command>" is resolved here so it survives a failed rewrite,
+      // and only the rest of the dictation goes to the LLM.
+      var codeTalkCommands: [String]?
+      var leadingCommand: CodeTalk.LeadingCommand?
+      if rewriteMode == .prompt, settings.codeTalkEnabled {
+        let commands = codeTalk.slashCommands()
+        codeTalkCommands = commands
+        leadingCommand = CodeTalk.leadingCommand(in: output, commands: commands)
+        if let leadingCommand {
+          HexLog.rewrite.info("Code talk resolved \(leadingCommand.command, privacy: .public)")
+          output = leadingCommand.remainder
+        }
+      }
+
       if rewriteMode != .raw, !output.isEmpty {
         await send(.rewriteStateChanged(true))
-        let outcome = await rewriteTranscript(output, mode: rewriteMode, settings: settings, targetAppName: sourceAppName)
+        let outcome = await rewriteTranscript(
+          output,
+          mode: rewriteMode,
+          settings: settings,
+          targetAppName: sourceAppName,
+          codeTalkCommands: codeTalkCommands
+        )
         await send(.rewriteStateChanged(false))
         timeline.rewritten = stampLatency("rewritten")
         guard !Task.isCancelled else {
@@ -502,6 +523,9 @@ private extension TranscriptionFeature {
           output = outcome.text
           appliedRewrite = rewriteMode
         }
+      }
+      if let leadingCommand {
+        output = CodeTalk.join(leadingCommand, rewrittenRemainder: output)
       }
 
       if !skipModifications {
@@ -524,7 +548,7 @@ private extension TranscriptionFeature {
       do {
         try await finalizeRecordingAndStoreTranscript(
           result: output,
-          rawText: appliedRewrite == nil ? nil : result,
+          rawText: appliedRewrite == nil && leadingCommand == nil ? nil : result,
           rewriteMode: appliedRewrite,
           rewriteOutcome: rewriteOutcome,
           duration: duration,
@@ -566,7 +590,8 @@ private extension TranscriptionFeature {
     _ transcript: String,
     mode: RewriteMode,
     settings: HexSettings,
-    targetAppName: String?
+    targetAppName: String?,
+    codeTalkCommands: [String]? = nil
   ) async -> RewriteOutcome {
     var endpoints: [(RewriteEndpointRole, RewriteEndpoint)] = [(.primary, settings.rewritePrimary)]
     if settings.rewriteFallbackEnabled {
@@ -578,6 +603,7 @@ private extension TranscriptionFeature {
       vocabulary: settings.vocabulary,
       targetAppName: targetAppName,
       instructions: settings.customInstructions(for: mode),
+      codeTalkCommands: codeTalkCommands,
       endpoints: endpoints
     ) { [rewrite, keychain] role, endpoint, messages in
       try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)

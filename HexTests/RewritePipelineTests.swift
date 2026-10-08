@@ -42,10 +42,45 @@ final class RewritePipelineTests: XCTestCase {
     XCTAssertNil(pasted.history.first?.rewriteFailures)
   }
 
+  func testLeadingSlashCommandSkipsTheLLMWhenNothingFollows() async {
+    let pasted = await runDictation("Slash pick up.", mode: .prompt, slashCommands: ["pickup"]) { _, _, _ in
+      XCTFail("rewrite called for a bare command")
+      return ""
+    }
+    XCTAssertEqual(pasted.text, "/pickup")
+    XCTAssertEqual(pasted.history.first?.rawText, "Slash pick up.")
+  }
+
+  func testLeadingSlashCommandPrefixesTheRewrittenRest() async {
+    let pasted = await runDictation("Slash handoff, um, and note the open bug", mode: .prompt, slashCommands: ["handoff"]) {
+      _, _, messages in
+      XCTAssertEqual(messages.last?.content, "<dictation>\nand note the open bug\n</dictation>")
+      XCTAssertTrue(messages.first?.content.contains("/handoff") == true)
+      return "Note the open bug."
+    }
+    XCTAssertEqual(pasted.text, "/handoff Note the open bug.")
+  }
+
+  func testLeadingSlashCommandSurvivesAFailedRewrite() async {
+    let pasted = await runDictation("Slash handoff and note the open bug", mode: .prompt, slashCommands: ["handoff"]) {
+      _, _, _ in throw Offline()
+    }
+    XCTAssertEqual(pasted.text, "/handoff and note the open bug")
+  }
+
+  func testCodeTalkIsPromptModeOnly() async {
+    let pasted = await runDictation("Slash handoff", mode: .clean, slashCommands: ["handoff"]) { _, _, messages in
+      XCTAssertFalse(messages.first?.content.contains("Code talk") == true)
+      return "Slash handoff."
+    }
+    XCTAssertEqual(pasted.text, "Slash handoff.")
+  }
+
   /// Sends one transcription result through the pipeline and returns what was pasted and stored.
   private func runDictation(
     _ transcript: String,
     mode: RewriteMode = .clean,
+    slashCommands: [String] = [],
     complete: @escaping @Sendable (RewriteEndpoint, String?, [ChatMessage]) async throws -> String
   ) async -> (text: String, history: [Transcript]) {
     let audioURL = FileManager.default.temporaryDirectory
@@ -64,6 +99,7 @@ final class RewritePipelineTests: XCTestCase {
     } withDependencies: {
       $0.rewrite.complete = complete
       $0.keychain.read = { _ in nil }
+      $0.codeTalk.slashCommands = { slashCommands }
       $0.transcriptPersistence.save = { text, audioURL, duration, bundleID, appName in
         Transcript(timestamp: Date(), text: text, audioPath: audioURL, duration: duration)
       }

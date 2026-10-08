@@ -19,16 +19,22 @@ public struct ChatMessage: Codable, Equatable, Sendable {
 /// text not orders, mishearing fixes, vocabulary, output only the rewrite) are always added.
 public enum RewritePromptBuilder {
 	/// Nil for `.raw`, which skips the LLM. `instructions` replaces the mode's default task when not blank.
+	/// `codeTalkCommands` (slash command names) turns on `CodeTalk` rules in Prompt mode, after the task,
+	/// so they survive custom instructions.
 	public static func messages(
 		mode: RewriteMode,
 		transcript: String,
 		vocabulary: [String] = [],
 		targetAppName: String? = nil,
-		instructions: String? = nil
+		instructions: String? = nil,
+		codeTalkCommands: [String]? = nil
 	) -> [ChatMessage]? {
 		guard var task = taskInstructions(for: mode) else { return nil }
 		if let custom = instructions?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
 			task = custom
+		}
+		if mode == .prompt, let codeTalkCommands {
+			task += "\n" + CodeTalk.instructions(slashCommands: codeTalkCommands)
 		}
 		return [
 			ChatMessage(role: "system", content: systemPrompt(task: task, vocabulary: vocabulary, targetAppName: targetAppName)),

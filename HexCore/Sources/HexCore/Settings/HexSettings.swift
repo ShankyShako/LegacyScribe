@@ -78,6 +78,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var vocabulary: [String]
 	/// The user's own instructions per mode, keyed by `RewriteMode.rawValue`; a missing mode uses the built-in default.
 	public var rewriteInstructions: [String: String]
+	/// Prompt mode writes spoken notation as code ("slash handoff" → /handoff) and knows the user's skills.
+	public var codeTalkEnabled: Bool
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -118,7 +120,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		rewriteFallbackEnabled: Bool = true,
 		rewriteModeShortcutsEnabled: Bool = true,
 		vocabulary: [String] = [],
-		rewriteInstructions: [String: String] = [:]
+		rewriteInstructions: [String: String] = [:],
+		codeTalkEnabled: Bool = true
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -153,6 +156,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.rewriteModeShortcutsEnabled = rewriteModeShortcutsEnabled
 		self.vocabulary = vocabulary
 		self.rewriteInstructions = rewriteInstructions
+		self.codeTalkEnabled = codeTalkEnabled
 		normalizeDoubleTapSettings()
 	}
 
@@ -210,6 +214,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case rewriteModeShortcutsEnabled
 	case vocabulary
 	case rewriteInstructions
+	case codeTalkEnabled
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -351,7 +356,8 @@ private enum HexSettingsSchema {
 		SettingsField(.rewriteFallbackEnabled, keyPath: \.rewriteFallbackEnabled, default: defaults.rewriteFallbackEnabled).eraseToAny(),
 		SettingsField(.rewriteModeShortcutsEnabled, keyPath: \.rewriteModeShortcutsEnabled, default: defaults.rewriteModeShortcutsEnabled).eraseToAny(),
 		SettingsField(.vocabulary, keyPath: \.vocabulary, default: defaults.vocabulary).eraseToAny(),
-		SettingsField(.rewriteInstructions, keyPath: \.rewriteInstructions, default: defaults.rewriteInstructions).eraseToAny()
+		SettingsField(.rewriteInstructions, keyPath: \.rewriteInstructions, default: defaults.rewriteInstructions).eraseToAny(),
+		SettingsField(.codeTalkEnabled, keyPath: \.codeTalkEnabled, default: defaults.codeTalkEnabled).eraseToAny()
 	]
 }
 

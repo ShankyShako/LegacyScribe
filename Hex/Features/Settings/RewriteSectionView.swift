@@ -38,6 +38,17 @@ struct RewriteSectionView: View {
 			}
 
 			Label {
+				Toggle("Code talk in Prompt mode", isOn: Binding(
+					get: { store.hexSettings.codeTalkEnabled },
+					set: { store.send(.setCodeTalkEnabled($0)) }
+				))
+				Text("Say “slash handoff” for /handoff, “claude dot md” for CLAUDE.md, “at readme dot md” for @README.md. Knows the skills and commands in ~/.claude.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "chevron.left.forwardslash.chevron.right")
+			}
+
+			Label {
 				TextField("Vocabulary", text: $vocabularyText, prompt: Text("OmniRoute, Syncthing"), axis: .vertical)
 					.lineLimit(1...4)
 					.onChange(of: vocabularyText) { _, text in
