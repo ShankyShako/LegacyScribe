@@ -10,13 +10,75 @@ struct PracticeView: View {
 
 	var body: some View {
 		Form {
+			readAloudSection
 			sentTextSection
 			vocabularySection
 			researchSection
 		}
 		.formStyle(.grouped)
 		.onAppear { researchModelText = store.hexSettings.practiceResearchModel }
+		.sheet(item: Binding(
+			get: { store.session },
+			set: { if $0 == nil { store.send(.endSession) } }
+		)) { _ in
+			PracticeSessionView(store: store)
+		}
 		.enableInjection()
+	}
+
+	// MARK: - Read aloud
+
+	private var readAloudSection: some View {
+		let script = PracticeScript.bundled
+		let log = store.practiceLog
+		let recorded = log.recordings.count
+		let reached = log.coverage(in: script)
+		let next = log.nextLine(in: script)
+		return Section {
+			Label {
+				Text("Read lines aloud to teach the speech model your voice. The first few cover every English sound, then sound combinations, then the jargon, code talk and numbers you actually dictate. Stop whenever you like: each line is saved as you go, and the most useful ones come first.")
+					.settingsCaption()
+				if !script.lines.isEmpty {
+					ProgressView(value: Double(recorded), total: Double(script.lines.count))
+					Text(Self.progressSummary(log: log, reached: reached, total: script.lines.count))
+						.font(.callout)
+				}
+				HStack {
+					if let next {
+						Button(recorded == 0 ? "Start practice" : "Continue") { store.send(.startSession) }
+							.buttonStyle(.borderedProminent)
+						Text("Next: \(next.stage.title)").settingsCaption()
+					} else if !script.lines.isEmpty {
+						Text("Every line is recorded or skipped.").settingsCaption()
+					}
+					Spacer()
+					if recorded > 0 {
+						Button("Show recordings") { NSWorkspace.shared.open(URL.practiceFolderURL) }
+					}
+				}
+				.padding(.top, 2)
+			} icon: {
+				Image(systemName: "text.bubble")
+			}
+		} header: {
+			Text("Read aloud")
+		}
+	}
+
+	static func progressSummary(log: PracticeLog, reached: PracticeLine?, total: Int) -> String {
+		var parts = ["\(log.recordings.count) of \(total) lines"]
+		if let reached {
+			parts.append("\(reached.soundsCovered) of \(PracticeScript.phonemeCount) sounds")
+			parts.append("\(reached.pairsCoveredPercent)% of sound pairs")
+		}
+		let minutes = Int((log.recordedSeconds / 60).rounded())
+		if log.recordedSeconds > 0 {
+			parts.append(minutes < 1 ? "under a minute of audio" : "\(minutes) min of audio")
+		}
+		if let rate = log.overallWordErrorRate {
+			parts.append(String(format: "engine heard %.0f%% of words right", max(0, 1 - rate) * 100))
+		}
+		return parts.joined(separator: " · ")
 	}
 
 	// MARK: - Sent text
