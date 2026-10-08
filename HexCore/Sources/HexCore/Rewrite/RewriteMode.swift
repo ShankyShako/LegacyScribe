@@ -47,6 +47,15 @@ extension RewriteMode {
 		return "⌃⌥\(number)"
 	}
 
+	/// SF Symbol for the mode, used in the on-screen mode notice.
+	public var systemImage: String {
+		switch self {
+		case .raw: "text.alignleft"
+		case .clean: "sparkles"
+		case .prompt: "curlybraces"
+		}
+	}
+
 	/// Shown next to the menu bar icon; nil for the default mode so the icon stays clean.
 	public var menuBarBadge: String? {
 		switch self {

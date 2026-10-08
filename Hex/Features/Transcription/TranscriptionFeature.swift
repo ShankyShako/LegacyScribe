@@ -24,6 +24,9 @@ struct TranscriptionFeature {
     var isPrewarming: Bool = false
     /// The LLM rewrite of the last dictation is in flight (shown like transcribing).
     var isRewriting: Bool = false
+    /// Counts dictations whose rewrite failed everywhere and were pasted as recognized; the indicator
+    /// shows a notice each time it changes.
+    var rewriteFallbackCount = 0
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
@@ -55,6 +58,7 @@ struct TranscriptionFeature {
     case transcriptionResult(String, URL, TimeInterval, DictationTimeline)
     case transcriptionError(Error, URL?)
     case rewriteStateChanged(Bool)
+    case rewriteFellBack
 
     // Model availability
     case modelMissing
@@ -128,6 +132,10 @@ struct TranscriptionFeature {
 
       case let .rewriteStateChanged(isRewriting):
         state.isRewriting = isRewriting
+        return .none
+
+      case .rewriteFellBack:
+        state.rewriteFallbackCount += 1
         return .none
 
       case let .transcriptionError(error, audioURL):
@@ -522,6 +530,8 @@ private extension TranscriptionFeature {
         if outcome.rewrittenBy != nil {
           output = outcome.text
           appliedRewrite = rewriteMode
+        } else if !outcome.failures.isEmpty {
+          await send(.rewriteFellBack)
         }
       }
       if let leadingCommand {
@@ -769,9 +779,16 @@ struct TranscriptionView: View {
   @Bindable var store: StoreOf<TranscriptionFeature>
   @ObserveInjection var inject
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  /// A one-off notice (mode change, rewrite fallback) and the id of its hide timer.
+  @State private var notice: DictationNotice?
+  @State private var noticeID = 0
+
   var status: TranscriptionIndicatorView.Status {
-    if store.isTranscribing || (store.isRewriting && !store.isRecording) {
+    if store.isTranscribing {
       return .transcribing
+    } else if store.isRewriting && !store.isRecording {
+      return .rewriting
     } else if store.isRecording {
       return .recording
     } else if store.isPrewarming {
@@ -781,15 +798,53 @@ struct TranscriptionView: View {
     }
   }
 
+  /// A one-off notice wins; otherwise a non-Clean mode is tagged while recording.
+  private var visibleNotice: DictationNotice? {
+    if let notice { return notice }
+    let mode = store.hexSettings.rewriteMode
+    return store.isRecording && mode != .clean ? .recordingIn(mode) : nil
+  }
+
   var body: some View {
-    TranscriptionIndicatorView(
-      status: status,
-      meter: store.meter
-    )
+    VStack(spacing: 8) {
+      TranscriptionIndicatorView(
+        status: status,
+        meter: store.meter
+      )
+      ZStack {
+        if let visibleNotice {
+          DictationNoticeView(notice: visibleNotice)
+            .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
+        }
+      }
+      // Only appearing and disappearing animate; a notice replacing another swaps in place.
+      .animation(
+        visibleNotice == nil ? DictationNoticeView.exit : DictationNoticeView.entrance,
+        value: visibleNotice == nil
+      )
+    }
+    .onChange(of: store.hexSettings.rewriteMode) { _, mode in
+      show(.modeChanged(mode))
+    }
+    .onChange(of: store.rewriteFallbackCount) { _, _ in
+      show(.rewriteFellBack)
+    }
+    .task(id: noticeID) {
+      guard let hold = notice?.holdDuration else { return }
+      try? await Task.sleep(for: hold)
+      guard !Task.isCancelled else { return }
+      notice = nil
+    }
     .task {
       await store.send(.task).finish()
     }
     .enableInjection()
+  }
+
+  /// Shows `next`, restarting the hide timer. Replacing a visible notice swaps the text in place.
+  private func show(_ next: DictationNotice) {
+    notice = next
+    noticeID += 1
   }
 }
 

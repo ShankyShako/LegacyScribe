@@ -17,6 +17,8 @@ struct TranscriptionIndicatorView: View {
     case optionKeyPressed
     case recording
     case transcribing
+    /// The LLM is rewriting the transcript (purple, so slow rewrites are told apart from slow speech-to-text).
+    case rewriting
     case prewarming
   }
 
@@ -24,6 +26,7 @@ struct TranscriptionIndicatorView: View {
   var meter: Meter
 
   let transcribeBaseColor: Color = .blue
+  let rewriteBaseColor: Color = .purple
   private var backgroundColor: Color {
     switch status {
     case .hidden: return Color.clear
@@ -31,6 +34,7 @@ struct TranscriptionIndicatorView: View {
     case .recording:
       return mixedColor(mixedNSColor(.red, with: .black, by: 0.5), with: .red, by: meter.averagePower * 3)
     case .transcribing: return mixedColor(.blue, with: .black, by: 0.5)
+    case .rewriting: return mixedColor(.systemPurple, with: .black, by: 0.5)
     case .prewarming: return mixedColor(.blue, with: .black, by: 0.5)
     }
   }
@@ -41,6 +45,7 @@ struct TranscriptionIndicatorView: View {
     case .optionKeyPressed: return Color.black
     case .recording: return mixedColor(.red, with: .white, by: 0.1).opacity(0.6)
     case .transcribing: return mixedColor(.blue, with: .white, by: 0.1).opacity(0.6)
+    case .rewriting: return mixedColor(.systemPurple, with: .white, by: 0.1).opacity(0.6)
     case .prewarming: return mixedColor(.blue, with: .white, by: 0.1).opacity(0.6)
     }
   }
@@ -60,6 +65,7 @@ struct TranscriptionIndicatorView: View {
     case .optionKeyPressed: return Color.clear
     case .recording: return Color.red
     case .transcribing: return transcribeBaseColor
+    case .rewriting: return rewriteBaseColor
     case .prewarming: return transcribeBaseColor
     }
   }
@@ -70,6 +76,10 @@ struct TranscriptionIndicatorView: View {
 
   var isHidden: Bool {
     status == .hidden
+  }
+
+  private var isWorking: Bool {
+    status == .transcribing || status == .rewriting
   }
 
   @State var transcribeEffect = 0
@@ -131,8 +141,8 @@ struct TranscriptionIndicatorView: View {
         .changeEffect(.glow(color: .red.opacity(0.5), radius: 8), value: status)
         .changeEffect(.shine(angle: .degrees(0), duration: 0.6), value: transcribeEffect)
         .compositingGroup()
-        .task(id: status == .transcribing) {
-          while status == .transcribing, !Task.isCancelled {
+        .task(id: isWorking) {
+          while isWorking, !Task.isCancelled {
             transcribeEffect += 1
             try? await Task.sleep(for: .seconds(0.25))
           }
@@ -166,6 +176,7 @@ struct TranscriptionIndicatorView: View {
     TranscriptionIndicatorView(status: .optionKeyPressed, meter: .init(averagePower: 0, peakPower: 0))
     TranscriptionIndicatorView(status: .recording, meter: .init(averagePower: 0.5, peakPower: 0.5))
     TranscriptionIndicatorView(status: .transcribing, meter: .init(averagePower: 0, peakPower: 0))
+    TranscriptionIndicatorView(status: .rewriting, meter: .init(averagePower: 0, peakPower: 0))
     TranscriptionIndicatorView(status: .prewarming, meter: .init(averagePower: 0, peakPower: 0))
   }
   .padding(40)
