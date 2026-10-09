@@ -335,7 +335,10 @@ struct AppView: View {
         WordRemappingsView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Transforms")
       case .practice:
-        PracticeView(store: store.scope(state: \.practice, action: \.practice))
+        PracticeView(
+          store: store.scope(state: \.practice, action: \.practice),
+          transcription: store.scope(state: \.transcription, action: \.transcription)
+        )
           .navigationTitle("Practice")
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))

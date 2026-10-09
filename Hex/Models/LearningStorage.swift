@@ -58,3 +58,8 @@ extension PracticeScript {
 		return script
 	}()
 }
+
+extension PracticeScript {
+	/// Sound pairs in the bundled script, for "% of sound combinations".
+	static let bundledPairCount = bundled.allPairs.count
+}

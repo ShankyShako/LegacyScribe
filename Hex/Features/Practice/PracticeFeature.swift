@@ -3,8 +3,8 @@ import Foundation
 import HexCore
 import WhisperKit
 
-/// The Practice tab: what dictations became when sent, vocabulary suggestions from history (only when
-/// asked), and a research question about personalizing the models, answered through OmniRoute.
+/// The Practice tab: short read-aloud sets, what dictations became when sent, vocabulary suggestions
+/// from history (only when asked), and a research question about personalizing the models.
 @Reducer
 struct PracticeFeature {
 	@ObservableState
@@ -16,6 +16,8 @@ struct PracticeFeature {
 
 		/// The read-aloud session while its sheet is open.
 		var session: PracticeSession?
+		/// Sizes of the files in the recordings folder, by name.
+		var practiceFiles: [String: Int64] = [:]
 
 		/// Nil until the user asks for a check.
 		var suggestions: [VocabularySuggestion]?
@@ -43,21 +45,30 @@ struct PracticeFeature {
 		case researchFailed(String)
 		case cancelResearch
 
-		case startSession
+		case startSession(endless: Bool)
 		case endSession
-		/// Space: start recording the current line, or stop and save it.
+		/// The record button: start recording the current line, or stop and save it.
 		case toggleRecording
+		/// Space went down (repeats filtered out) or up: tap to start and stop, or hold to speak.
+		case spaceDown
+		case spaceUp
 		case lineSaved(PracticeRecording)
 		case lineFailed(String)
 		case skipLine
 		/// Record the previous line again.
 		case redoLast
+
+		case scanPracticeFolder
+		case practiceFolderScanned([String: Int64]?)
+		case markTrained
+		case clearTrainedAudio
 	}
 
 	enum CancelID {
 		case check
 		case research
 		case practiceLine
+		case scan
 	}
 
 	/// A history check sends up to ~14K characters; a fast model answers in a few seconds.
@@ -71,6 +82,7 @@ struct PracticeFeature {
 	@Dependency(\.transcription) var transcription
 	@Dependency(\.soundEffects) var soundEffects
 	@Dependency(\.date.now) var now
+	@Dependency(\.withRandomNumberGenerator) var withRandomNumberGenerator
 
 	var body: some ReducerOf<Self> {
 		Reduce { state, action in
@@ -197,8 +209,11 @@ struct PracticeFeature {
 				state.isResearching = false
 				return .cancel(id: CancelID.research)
 
-			case .startSession, .endSession, .toggleRecording, .lineSaved, .lineFailed, .skipLine, .redoLast:
+			case .startSession, .endSession, .toggleRecording, .spaceDown, .spaceUp, .lineSaved, .lineFailed, .skipLine, .redoLast:
 				return reduceSession(&state, action)
+
+			case .scanPracticeFolder, .practiceFolderScanned, .markTrained, .clearTrainedAudio:
+				return reduceStorage(&state, action)
 			}
 		}
 	}
@@ -206,8 +221,8 @@ struct PracticeFeature {
 
 // MARK: - Read-aloud session
 
-/// One sitting of read-aloud practice. Each line is saved as soon as it's read, so ending the session at
-/// any point keeps everything recorded so far.
+/// One sitting of read-aloud practice: a set of up to ten lines, or endless. Each line is saved as soon
+/// as it's read, so ending the session at any point keeps everything recorded so far.
 struct PracticeSession: Equatable, Identifiable {
 	enum Phase: Equatable {
 		case ready
@@ -215,23 +230,51 @@ struct PracticeSession: Equatable, Identifiable {
 		case saving
 	}
 
-	let id = UUID()
-	/// Nil when every line is recorded or skipped.
-	var line: PracticeLine?
+	var id = UUID()
+	var isEndless: Bool
+	/// The set's lines, or in endless mode every line shown so far.
+	var picks: [PracticePick]
+	var index = 0
+	/// A line being read again, ahead of `picks[index]`.
+	var redo: PracticePick?
 	var phase: Phase = .ready
 	/// The line just saved, with what the engine heard.
 	var lastRecording: PracticeRecording?
 	var error: String?
-	/// Lines recorded in this sitting.
-	var recordedCount = 0
+	/// Word error rate per line recorded in this sitting (nil if the engine failed).
+	var results: [String: Double?] = [:]
+	var spaceKey = PracticeSpaceKey()
+
+	var isRecording: Bool {
+		if case .recording = phase { true } else { false }
+	}
+
+	/// Nil when the set is done, or in endless mode when every line is recorded.
+	var current: PracticePick? {
+		redo ?? (picks.indices.contains(index) ? picks[index] : nil)
+	}
+
+	var perfectCount: Int {
+		results.values.filter { $0 == 0 }.count
+	}
 }
 
 extension PracticeFeature {
 	func reduceSession(_ state: inout State, _ action: Action) -> Effect<Action> {
 		let script = PracticeScript.bundled
 		switch action {
-		case .startSession:
-			state.session = PracticeSession(line: state.practiceLog.nextLine(in: script))
+		case let .startSession(endless):
+			let log = state.practiceLog
+			let picks = withRandomNumberGenerator { generator in
+				endless
+					? PracticePicker.pickNext(script: script, log: log, after: [], using: &generator).map { [$0] } ?? []
+					: PracticePicker.pickSet(script: script, log: log, using: &generator)
+			}
+			var session = PracticeSession(isEndless: endless, picks: picks)
+			// "Another set" keeps the sheet open.
+			session.id = state.session?.id ?? session.id
+			state.session = session
+			markShown(&state)
 			return .run { [recording] _ in await recording.warmUpRecorder() }
 
 		case .endSession:
@@ -249,22 +292,27 @@ extension PracticeFeature {
 			)
 
 		case .toggleRecording:
-			guard var session = state.session, let line = session.line else { return .none }
+			guard var session = state.session, let line = session.current?.line else { return .none }
 			switch session.phase {
 			case .ready:
 				session.phase = .recording(startedAt: now)
 				session.error = nil
 				state.session = session
-				return .run { [recording, soundEffects] _ in
-					soundEffects.play(.startRecording)
-					await recording.startRecording()
-				}
-				.cancellable(id: CancelID.practiceLine, cancelInFlight: true)
+				return .merge(
+					.run { [recording, soundEffects] _ in
+						soundEffects.play(.startRecording)
+						await recording.startRecording()
+					}
+					.cancellable(id: CancelID.practiceLine, cancelInFlight: true),
+					.run { [transcription, model = state.hexSettings.selectedModel] _ in
+						await transcription.prewarm(model)
+					}
+				)
 
 			case let .recording(startedAt):
 				session.phase = .saving
 				state.session = session
-				let duration = now.timeIntervalSince(startedAt)
+				let elapsed = now.timeIntervalSince(startedAt)
 				let model = state.hexSettings.selectedModel
 				let date = now
 				return .run { [recording, transcription, soundEffects] send in
@@ -278,8 +326,7 @@ extension PracticeFeature {
 						let folder = URL.practiceFolderURL
 						try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 						let audio = folder.appending(component: "\(line.id).wav")
-						FileManager.default.removeItemIfExists(at: audio)
-						try FileManager.default.moveItem(at: captured, to: audio)
+						let kept = try PracticeAudio.saveTrimmed(from: captured, to: audio)
 						// The reference transcript next to the audio: an lsbench fixture.
 						try line.text.write(to: folder.appending(component: "\(line.id).txt"), atomically: true, encoding: .utf8)
 
@@ -295,7 +342,7 @@ extension PracticeFeature {
 							text: line.text,
 							audioFileName: audio.lastPathComponent,
 							recordedAt: date,
-							duration: duration,
+							duration: kept ?? elapsed,
 							recognized: recognized,
 							engine: model,
 							wordErrorRate: recognized.map { WordErrorRate.rate(reference: line.text, hypothesis: $0) }
@@ -311,18 +358,34 @@ extension PracticeFeature {
 				return .none
 			}
 
+		case .spaceDown:
+			guard var session = state.session else { return .none }
+			let command = session.spaceKey.keyDown(
+				isRecording: session.isRecording,
+				canStart: session.phase == .ready && session.current != nil,
+				at: now
+			)
+			state.session = session
+			return command == .none ? .none : reduceSession(&state, .toggleRecording)
+
+		case .spaceUp:
+			guard var session = state.session else { return .none }
+			let command = session.spaceKey.keyUp(isRecording: session.isRecording, at: now)
+			state.session = session
+			return command == .none ? .none : reduceSession(&state, .toggleRecording)
+
 		case let .lineSaved(recording):
 			state.$practiceLog.withLock { log in
 				log.recordings[recording.lineID] = recording
 				log.skipped.remove(recording.lineID)
+				log.seen.insert(recording.lineID)
 			}
-			guard var session = state.session else { return .none }
-			session.lastRecording = recording
-			session.recordedCount += 1
-			session.phase = .ready
-			session.line = state.practiceLog.nextLine(in: script)
-			state.session = session
-			return .none
+			guard state.session != nil else { return .send(.scanPracticeFolder) }
+			state.session?.lastRecording = recording
+			state.session?.results[recording.lineID] = .some(recording.wordErrorRate)
+			state.session?.phase = .ready
+			advance(&state, script: script)
+			return .send(.scanPracticeFolder)
 
 		case let .lineFailed(message):
 			state.session?.phase = .ready
@@ -330,20 +393,98 @@ extension PracticeFeature {
 			return .none
 
 		case .skipLine:
-			guard let session = state.session, session.phase == .ready, let line = session.line else { return .none }
-			state.$practiceLog.withLock { _ = $0.skipped.insert(line.id) }
-			let next = state.practiceLog.nextLine(in: script)
-			state.session?.line = next
+			guard let session = state.session, session.phase == .ready, let pick = session.current else { return .none }
+			// Skipping a redo keeps the recording it was redoing.
+			if session.redo == nil {
+				state.$practiceLog.withLock { _ = $0.skipped.insert(pick.id) }
+			}
+			advance(&state, script: script)
 			return .none
 
 		case .redoLast:
-			guard let session = state.session, session.phase == .ready,
+			guard let session = state.session, session.phase == .ready, session.redo == nil,
 			      let last = session.lastRecording,
-			      let line = script.lines.first(where: { $0.id == last.lineID })
+			      let line = script.line(id: last.lineID)
 			else { return .none }
-			state.session?.line = line
+			let role = session.picks.first { $0.id == line.id }?.role ?? line.stage
+			state.session?.redo = PracticePick(role: role, line: line)
 			state.session?.lastRecording = nil
 			return .none
+
+		default:
+			return .none
+		}
+	}
+
+	/// Moves past the current line; in endless mode, picks the next one.
+	private func advance(_ state: inout State, script: PracticeScript) {
+		guard var session = state.session else { return }
+		if session.redo != nil {
+			session.redo = nil
+		} else {
+			session.index += 1
+		}
+		if session.isEndless, session.index == session.picks.count {
+			let log = state.practiceLog
+			let picks = session.picks
+			if let next = withRandomNumberGenerator({ PracticePicker.pickNext(script: script, log: log, after: picks, using: &$0) }) {
+				session.picks.append(next)
+			}
+		}
+		state.session = session
+		markShown(&state)
+	}
+
+	/// A line on screen counts as seen, so later sets start with lines not shown yet.
+	private func markShown(_ state: inout State) {
+		guard let id = state.session?.current?.id else { return }
+		state.$practiceLog.withLock { _ = $0.seen.insert(id) }
+	}
+}
+
+// MARK: - Recordings on disk
+
+extension PracticeFeature {
+	func reduceStorage(_ state: inout State, _ action: Action) -> Effect<Action> {
+		switch action {
+		case .scanPracticeFolder:
+			return .run { send in
+				await send(.practiceFolderScanned(PracticeAudio.scan(.practiceFolderURL)))
+			}
+			.cancellable(id: CancelID.scan, cancelInFlight: true)
+
+		case let .practiceFolderScanned(files):
+			guard let files else { return .none }
+			state.practiceFiles = files
+			let dropped = state.$practiceLog.withLock { $0.dropMissingAudio(present: Set(files.keys)) }
+			if dropped > 0 {
+				HexLog.learning.notice("Dropped \(dropped) practice recordings whose audio is missing")
+			}
+			return .none
+
+		case .markTrained:
+			let date = now
+			state.$practiceLog.withLock { log in
+				for recording in log.untrained {
+					log.recordings[recording.lineID]?.trainedAt = date
+				}
+			}
+			return .none
+
+		case .clearTrainedAudio:
+			let recordings = state.practiceLog.trainedWithAudio
+			guard !recordings.isEmpty else { return .none }
+			// Flagged before the files go, so a scan in between doesn't take them for lost recordings.
+			let date = now
+			state.$practiceLog.withLock { log in
+				for recording in recordings {
+					log.recordings[recording.lineID]?.audioClearedAt = date
+				}
+			}
+			return .run { send in
+				PracticeAudio.delete(recordings, in: .practiceFolderURL)
+				await send(.scanPracticeFolder)
+			}
 
 		default:
 			return .none

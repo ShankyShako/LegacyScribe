@@ -6,7 +6,9 @@ import SwiftUI
 struct PracticeView: View {
 	@ObserveInjection var inject
 	@Bindable var store: StoreOf<PracticeFeature>
+	var transcription: StoreOf<TranscriptionFeature>
 	@State private var researchModelText = ""
+	@State private var confirmingClear = false
 
 	var body: some View {
 		Form {
@@ -16,12 +18,15 @@ struct PracticeView: View {
 			researchSection
 		}
 		.formStyle(.grouped)
-		.onAppear { researchModelText = store.hexSettings.practiceResearchModel }
+		.onAppear {
+			researchModelText = store.hexSettings.practiceResearchModel
+			store.send(.scanPracticeFolder)
+		}
 		.sheet(item: Binding(
 			get: { store.session },
 			set: { if $0 == nil { store.send(.endSession) } }
 		)) { _ in
-			PracticeSessionView(store: store)
+			PracticeSessionView(store: store, transcription: transcription)
 		}
 		.enableInjection()
 	}
@@ -32,44 +37,100 @@ struct PracticeView: View {
 		let script = PracticeScript.bundled
 		let log = store.practiceLog
 		let recorded = log.recordings.count
-		let reached = log.coverage(in: script)
-		let next = log.nextLine(in: script)
+		let allRecorded = !script.lines.isEmpty && script.lines.allSatisfy { log.recordings[$0.id] != nil }
 		return Section {
 			Label {
-				Text("Read lines aloud to teach the speech model your voice. The first few cover every English sound, then sound combinations, then the jargon, code talk and numbers you actually dictate. Stop whenever you like: each line is saved as you go, and the most useful ones come first.")
+				Text("Read a few lines aloud so the speech model learns your voice. Each set has up to ten lines: the sounds you've recorded least, sound combinations you haven't covered yet, your own jargon and numbers, and one ordinary line. Each line is saved as soon as you read it, so you can stop at any point.")
 					.settingsCaption()
 				if !script.lines.isEmpty {
 					ProgressView(value: Double(recorded), total: Double(script.lines.count))
-					Text(Self.progressSummary(log: log, reached: reached, total: script.lines.count))
+					Text(Self.progressSummary(log: log, script: script))
 						.font(.callout)
 				}
-				HStack {
-					if let next {
-						Button(recorded == 0 ? "Start practice" : "Continue") { store.send(.startSession) }
-							.buttonStyle(.borderedProminent)
-						Text("Next: \(next.stage.title)").settingsCaption()
-					} else if !script.lines.isEmpty {
-						Text("Every line is recorded or skipped.").settingsCaption()
+				if allRecorded {
+					Text("You've recorded every line.").settingsCaption()
+				} else if !script.lines.isEmpty {
+					HStack {
+						Button {
+							store.send(.startSession(endless: false))
+						} label: {
+							Label("Start a set", systemImage: "mic.fill")
+						}
+						.buttonStyle(.borderedProminent)
+						Button("Endless") { store.send(.startSession(endless: true)) }
+						Spacer()
 					}
-					Spacer()
-					if recorded > 0 {
-						Button("Show recordings") { NSWorkspace.shared.open(URL.practiceFolderURL) }
-					}
+					.controlSize(.large)
+					.padding(.top, 2)
+					Text("Endless keeps giving you lines you haven't seen until you stop.")
+						.settingsCaption()
 				}
-				.padding(.top, 2)
 			} icon: {
 				Image(systemName: "text.bubble")
+			}
+
+			if recorded > 0 || !store.practiceFiles.isEmpty {
+				storageRow(log: log)
 			}
 		} header: {
 			Text("Read aloud")
 		}
 	}
 
-	static func progressSummary(log: PracticeLog, reached: PracticeLine?, total: Int) -> String {
-		var parts = ["\(log.recordings.count) of \(total) lines"]
-		if let reached {
-			parts.append("\(reached.soundsCovered) of \(PracticeScript.phonemeCount) sounds")
-			parts.append("\(reached.pairsCoveredPercent)% of sound pairs")
+	private func storageRow(log: PracticeLog) -> some View {
+		let files = store.practiceFiles
+		let total = files.values.reduce(0, +)
+		let trained = log.trainedWithAudio
+		let trainedBytes = trained.reduce(Int64(0)) { $0 + (files[$1.audioFileName] ?? 0) }
+		let untrained = log.untrained.count
+		let cleared = log.recordings.values.filter { !$0.hasAudio }.count
+		var counts: [String] = []
+		if untrained > 0 { counts.append("\(untrained) not trained yet") }
+		if !trained.isEmpty { counts.append("\(trained.count) trained (\(Self.bytes(trainedBytes)))") }
+		if cleared > 0 { counts.append("\(cleared) with audio deleted") }
+		return Label {
+			HStack {
+				Text("Recordings use \(Self.bytes(total))")
+				Spacer()
+				Button("Show in Finder") { NSWorkspace.shared.open(URL.practiceFolderURL) }
+			}
+			if !counts.isEmpty {
+				Text(counts.joined(separator: " · ")).settingsCaption()
+			}
+			HStack {
+				Button("Mark all as trained") { store.send(.markTrained) }
+					.disabled(untrained == 0)
+				Button("Delete trained audio", role: .destructive) { confirmingClear = true }
+					.disabled(trained.isEmpty)
+				Spacer()
+			}
+			.controlSize(.large)
+			Text("Silence is cut from each recording when it's saved. After you train a model on these recordings, mark them as trained. Deleting trained audio frees the space, and those lines stay counted as recorded so they won't come up again.")
+				.settingsCaption()
+		} icon: {
+			Image(systemName: "internaldrive")
+		}
+		.confirmationDialog(
+			"Delete the audio of \(trained.count) trained line\(trained.count == 1 ? "" : "s")?",
+			isPresented: $confirmingClear
+		) {
+			Button("Delete \(Self.bytes(trainedBytes))", role: .destructive) { store.send(.clearTrainedAudio) }
+		} message: {
+			Text("The recordings can't be used again for training or benchmarks.")
+		}
+	}
+
+	static func bytes(_ count: Int64) -> String {
+		ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+	}
+
+	static func progressSummary(log: PracticeLog, script: PracticeScript) -> String {
+		let coverage = log.coverage(in: script)
+		var parts = ["\(log.recordings.count) of \(script.lines.count) lines"]
+		if log.recordings.count > 0 {
+			parts.append("\(coverage.soundsCovered) of \(PracticeScript.phonemeCount) sounds")
+			let pairs = max(PracticeScript.bundledPairCount, 1)
+			parts.append("\(100 * coverage.pairs.count / pairs)% of sound combinations")
 		}
 		let minutes = Int((log.recordedSeconds / 60).rounded())
 		if log.recordedSeconds > 0 {
@@ -94,7 +155,7 @@ struct PracticeView: View {
 					get: { store.hexSettings.captureSentEdits },
 					set: { store.send(.setCaptureSentEdits($0)) }
 				))
-				Text("After a paste, pressing Enter in the same text box keeps the version you sent, edits and all. Nothing in History changes, and it stays on this Mac. Not in terminals.")
+				Text("After a paste, pressing Enter in the same text box saves the version you sent, including your edits. History stays as it was, everything stays on this Mac, and terminals are skipped.")
 					.settingsCaption()
 			} icon: {
 				Image(systemName: "return")
@@ -127,7 +188,7 @@ struct PracticeView: View {
 				}
 			} else if let suggestions = store.suggestions, store.checkError == nil {
 				if suggestions.isEmpty {
-					Text("Nothing new stood out. Your vocabulary already covers what you say.")
+					Text("No new words found.")
 						.settingsCaption()
 				}
 				ForEach(suggestions) { suggestion in
@@ -146,8 +207,8 @@ struct PracticeView: View {
 				}
 			} else {
 				Label {
-					Text("Want me to check your history for words to add to your vocabulary?")
-					Text("Looks at what speech recognition heard next to what you kept, and suggests names and jargon it keeps getting wrong. Sends recent dictations to your rewrite endpoint (\(store.hexSettings.rewritePrimary.model)).")
+					Text("Check your history for words to add to your vocabulary.")
+					Text("Compares what speech recognition heard with what you kept, and suggests names and jargon it gets wrong. Recent dictations are sent to your rewrite endpoint (\(store.hexSettings.rewritePrimary.model)).")
 						.settingsCaption()
 					if let error = store.checkError {
 						Text(error).font(.caption).foregroundStyle(.red)
@@ -176,7 +237,7 @@ struct PracticeView: View {
 	private var researchSection: some View {
 		Section {
 			Label {
-				Text("Ask OmniRoute what research exists on personalized training: which speech and text models capture enough detail from your own transcriptions to be worth tuning, how much data that takes, and what to collect now.")
+				Text("Ask OmniRoute about research on training speech and text models on your own recordings: which models are worth tuning, how much data it takes, and what to collect now.")
 					.settingsCaption()
 				HStack {
 					TextField("Model", text: $researchModelText, prompt: Text("wp-search"))
@@ -194,7 +255,7 @@ struct PracticeView: View {
 							.buttonStyle(.borderedProminent)
 					}
 				}
-				Text("Use a model that can search the web. Goes to your primary endpoint with your history counts, never the text.")
+				Text("Use a model that can search the web. Your primary endpoint gets how many dictations and edits you have. Their text stays on this Mac.")
 					.settingsCaption()
 			} icon: {
 				Image(systemName: "books.vertical")
@@ -203,7 +264,7 @@ struct PracticeView: View {
 			if store.isResearching, store.research.isEmpty {
 				HStack(spacing: 8) {
 					ProgressView().controlSize(.small)
-					Text("Searching… this can take a minute.").settingsCaption()
+					Text("Searching. This can take a minute.").settingsCaption()
 				}
 			}
 			if let error = store.researchError {

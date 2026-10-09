@@ -456,6 +456,10 @@ private extension TranscriptionFeature {
     // Prevent system sleep during recording
     return .merge(
       .cancel(id: CancelID.recordingCleanup),
+      // An idle-unloaded model loads again while the user speaks (~0.4 s for Cohere).
+      .run { [transcription, model = state.hexSettings.selectedModel] _ in
+        await transcription.prewarm(model)
+      },
       .run { [sleepManagement, preventSleep = state.hexSettings.preventSystemSleep] _ in
         // Play sound immediately for instant feedback
         soundEffect.play(.startRecording)

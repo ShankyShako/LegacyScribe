@@ -1,8 +1,12 @@
 import Darwin
 import FluidAudio
 import Foundation
+import MLX
 
-// lsbench --engine <id> --fixtures <dir> [--runs N] [--json out.json] [--cohere-chunk SECONDS]
+// lsbench --engine <id> --fixtures <dir> [--runs N] [--json out.json] [--cohere-chunk SECONDS] [--reload]
+//
+// --reload: after the runs, unload the model and report the footprint right after and 5 s later
+// (Metal returns memory lazily), then time a reload with warm-up.
 //
 // Engines:
 //   cohere:<model-dir>            Cohere Transcribe via mlx-audio-swift, loaded from a local MLX checkpoint
@@ -39,6 +43,17 @@ func peakFootprintMB() -> Double {
         }
     }
     return kr == KERN_SUCCESS ? Double(info.ledger_phys_footprint_peak) / 1_048_576 : -1
+}
+
+func currentFootprintMB() -> Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
 }
 
 func machineName() -> String {
@@ -85,6 +100,7 @@ func run() async throws {
     let runs = option("--runs").flatMap(Int.init) ?? 3
     let jsonPath = option("--json")
     let cohereChunkSeconds = option("--cohere-chunk").flatMap(Float.init)
+    let measureReload = args.contains("--reload")
 
     let fixturesDir = URL(fileURLWithPath: (fixturesPath as NSString).expandingTildeInPath)
     let audioFiles = try FileManager.default.contentsOfDirectory(at: fixturesDir, includingPropertiesForKeys: nil)
@@ -136,6 +152,16 @@ func run() async throws {
     )
     print(String(format: "\n%@  load %.1fs  peak footprint %.0f MB  corpus WER %@", engine.name, loadSeconds, report.peakFootprintMB,
                  report.corpusWER.map { String(format: "%.2f%%", $0 * 100) } ?? "n/a"))
+    print(String(format: "footprint between clips %.0f MB; MLX active %d MB, cache %d MB", currentFootprintMB(), Memory.activeMemory >> 20, Memory.cacheMemory >> 20))
+    if measureReload {
+        engine.unload()
+        print(String(format: "after unload %.0f MB; MLX active %d MB, cache %d MB", currentFootprintMB(), Memory.activeMemory >> 20, Memory.cacheMemory >> 20))
+        try await Task.sleep(for: .seconds(5))
+        print(String(format: "5 s later %.0f MB", currentFootprintMB()))
+        let reloadStart = ContinuousClock.now
+        try await engine.load(warmup: Array(clips[0].samples.prefix(16_000 * 3)))
+        print(String(format: "reload + warm-up %.2f s, then %.0f MB", (ContinuousClock.now - reloadStart).seconds, currentFootprintMB()))
+    }
     if let jsonPath {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

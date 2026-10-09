@@ -14,7 +14,8 @@ Hex/Resources/Data/practice_lines.json:
             new out-of-dictionary words (technical terms the recognizer is least likely to know).
 4. "extra":  general sentences that add no new diphone; more samples of known sounds.
 
-Each line carries cumulative coverage so the app can say how much a stopped session covered.
+Each line carries its own sounds (phoneme counts), sound pairs and out-of-dictionary terms, so the app
+can pick each practice set to fill whatever the recordings so far are missing.
 Usage: python3 order_lines.py candidates.jsonl > practice_lines.json   (needs `pip install cmudict`)
 """
 import hashlib
@@ -107,12 +108,13 @@ def main():
         covered_pairs |= row["pairs"]
         seen_unknown.update(row["unknown"])
         ordered.append({
-            # Stable across rebuilds, so reordering never breaks recorded progress.
+            # Stable across rebuilds, so a rebuild keeps recorded progress.
             "id": "l" + hashlib.sha1(row["text"].encode()).hexdigest()[:10],
             "text": row["text"],
             "stage": stage,
-            "soundsCovered": sum(1 for p in ALL_PHONEMES if have[p] > 0),
-            "pairsCoveredPercent": round(100 * len(covered_pairs) / len(all_pairs)),
+            "sounds": dict(sorted(row["counts"].items())),
+            "pairs": sorted(f"{a}-{b}" for a, b in row["pairs"]),
+            "terms": sorted(row["unknown"]),
         })
 
     general = lambda: [r for r in rows if r["group"] == "general"]
@@ -147,7 +149,9 @@ def main():
         take(rows[0], "extra")
 
     missing = sorted(p for p in ALL_PHONEMES if have[p] == 0)
-    print(json.dumps({"version": 1, "lines": ordered}, indent=1, ensure_ascii=False))
+    # One line per entry keeps the file diffable.
+    body = ",\n".join(json.dumps(line, ensure_ascii=False) for line in ordered)
+    print('{"version": 2, "lines": [\n' + body + "\n]}")
     stages = {s: sum(1 for l in ordered if l["stage"] == s) for s in ("sounds", "pairs", "detail", "extra")}
     print(f"{len(ordered)} lines {stages}; phonemes missing: {missing or 'none'}; {len(all_pairs)} diphones", file=sys.stderr)
 

@@ -1,17 +1,17 @@
 import Foundation
 
-/// One read-aloud line. The script is ordered so that stopping at any point still leaves the best
-/// training data for the time spent: every English sound first, then sound pairs, then the fine detail
-/// (jargon, code talk, numbers). Built by `tools/practice/order_lines.py`.
-public struct PracticeLine: Codable, Equatable, Identifiable, Sendable {
+/// One read-aloud line, with the sounds it contains so a practice set can be picked to fill whatever
+/// the recordings so far are missing. Built by `tools/practice/order_lines.py`.
+public struct PracticeLine: Codable, Equatable, Hashable, Identifiable, Sendable {
+	/// What kind of line it is, and the slot it fills in a practice set.
 	public enum Stage: String, Codable, CaseIterable, Sendable {
-		/// Covers every English sound (CMU's 39 phonemes) at least twice.
+		/// Lines rich in sounds the recordings have least of (CMU's 39 phonemes).
 		case sounds
-		/// Adds new sound pairs (diphones), most per word first.
+		/// Lines with sound pairs (diphones) not yet recorded.
 		case pairs
 		/// Technical terms, spoken code, numbers, fillers: how this person actually dictates.
 		case detail
-		/// Lines that add no new sound pair: more samples of known sounds.
+		/// Ordinary lines: more samples of known sounds.
 		case extra
 
 		public var title: String {
@@ -27,17 +27,31 @@ public struct PracticeLine: Codable, Equatable, Identifiable, Sendable {
 	public var id: String
 	public var text: String
 	public var stage: Stage
-	/// Phonemes covered once this line and every line before it are recorded (of 39).
-	public var soundsCovered: Int
-	/// Share of the script's sound pairs covered by then.
-	public var pairsCoveredPercent: Int
+	/// Phoneme → how often it occurs in the line.
+	public var sounds: [String: Int]
+	/// Adjacent phoneme pairs, as "AA-B".
+	public var pairs: [String]
+	/// Words the pronouncing dictionary doesn't know (jargon, product names).
+	public var terms: [String]
 
-	public init(id: String, text: String, stage: Stage, soundsCovered: Int, pairsCoveredPercent: Int) {
+	public init(
+		id: String,
+		text: String,
+		stage: Stage,
+		sounds: [String: Int] = [:],
+		pairs: [String] = [],
+		terms: [String] = []
+	) {
 		self.id = id
 		self.text = text
 		self.stage = stage
-		self.soundsCovered = soundsCovered
-		self.pairsCoveredPercent = pairsCoveredPercent
+		self.sounds = sounds
+		self.pairs = pairs
+		self.terms = terms
+	}
+
+	public var wordCount: Int {
+		max(1, text.split(whereSeparator: \.isWhitespace).count)
 	}
 }
 
@@ -47,9 +61,18 @@ public struct PracticeScript: Codable, Equatable, Sendable {
 	public var version: Int
 	public var lines: [PracticeLine]
 
-	public init(version: Int = 1, lines: [PracticeLine]) {
+	public init(version: Int = 2, lines: [PracticeLine]) {
 		self.version = version
 		self.lines = lines
+	}
+
+	public func line(id: String) -> PracticeLine? {
+		lines.first { $0.id == id }
+	}
+
+	/// Every sound pair in the script: the denominator for "how much is covered".
+	public var allPairs: Set<String> {
+		Set(lines.flatMap(\.pairs))
 	}
 }
 
@@ -65,6 +88,10 @@ public struct PracticeRecording: Codable, Equatable, Sendable {
 	public var recognized: String?
 	public var engine: String
 	public var wordErrorRate: Double?
+	/// Set by the user once a model has been trained on this recording.
+	public var trainedAt: Date?
+	/// When the audio was deleted to free space. The line stays recorded, so it isn't asked again.
+	public var audioClearedAt: Date?
 
 	public init(
 		lineID: String,
@@ -74,7 +101,9 @@ public struct PracticeRecording: Codable, Equatable, Sendable {
 		duration: TimeInterval,
 		recognized: String?,
 		engine: String,
-		wordErrorRate: Double?
+		wordErrorRate: Double?,
+		trainedAt: Date? = nil,
+		audioClearedAt: Date? = nil
 	) {
 		self.lineID = lineID
 		self.text = text
@@ -84,27 +113,62 @@ public struct PracticeRecording: Codable, Equatable, Sendable {
 		self.recognized = recognized
 		self.engine = engine
 		self.wordErrorRate = wordErrorRate
+		self.trainedAt = trainedAt
+		self.audioClearedAt = audioClearedAt
 	}
+
+	public var hasAudio: Bool { audioClearedAt == nil }
+	public var isTrained: Bool { trainedAt != nil }
 }
 
-/// Which lines are done. Kept forever, like the audio (calibration data).
+/// Which lines are recorded, skipped or already shown. Kept forever, like the audio (calibration data).
 public struct PracticeLog: Codable, Equatable, Sendable {
 	public var recordings: [String: PracticeRecording] = [:]
 	public var skipped: Set<String> = []
+	/// Lines shown in a session, recorded or not. New sets prefer lines not in here.
+	public var seen: Set<String> = []
 
-	public init(recordings: [String: PracticeRecording] = [:], skipped: Set<String> = []) {
+	public init(recordings: [String: PracticeRecording] = [:], skipped: Set<String> = [], seen: Set<String> = []) {
 		self.recordings = recordings
 		self.skipped = skipped
+		self.seen = seen
 	}
 
-	/// The first line in script order that is neither recorded nor skipped.
-	public func nextLine(in script: PracticeScript) -> PracticeLine? {
-		script.lines.first { recordings[$0.id] == nil && !skipped.contains($0.id) }
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		recordings = try container.decodeIfPresent([String: PracticeRecording].self, forKey: .recordings) ?? [:]
+		skipped = try container.decodeIfPresent(Set<String>.self, forKey: .skipped) ?? []
+		seen = try container.decodeIfPresent(Set<String>.self, forKey: .seen) ?? []
 	}
 
-	/// The furthest line reached in order: what a stopped session has covered.
-	public func coverage(in script: PracticeScript) -> PracticeLine? {
-		script.lines.last { recordings[$0.id] != nil }
+	public func hasSeen(_ id: String) -> Bool {
+		seen.contains(id) || skipped.contains(id) || recordings[id] != nil
+	}
+
+	/// Sounds, pairs and terms in every recorded line.
+	public func coverage(in script: PracticeScript) -> PracticeCoverage {
+		PracticeCoverage(script.lines.filter { recordings[$0.id] != nil })
+	}
+
+	/// Recorded lines that still have audio and aren't marked trained.
+	public var untrained: [PracticeRecording] {
+		recordings.values.filter { $0.hasAudio && !$0.isTrained }
+	}
+
+	/// Trained lines whose audio is still on disk.
+	public var trainedWithAudio: [PracticeRecording] {
+		recordings.values.filter { $0.hasAudio && $0.isTrained }
+	}
+
+	/// Drops recordings whose audio has gone missing (deleted in Finder, a crash mid-save), so their
+	/// lines can be recorded again. Lines cleared on purpose stay. Returns how many were dropped.
+	@discardableResult
+	public mutating func dropMissingAudio(present audioFiles: Set<String>) -> Int {
+		let missing = recordings.filter { $0.value.hasAudio && !audioFiles.contains($0.value.audioFileName) }
+		for id in missing.keys {
+			recordings[id] = nil
+		}
+		return missing.count
 	}
 
 	public var recordedSeconds: TimeInterval {

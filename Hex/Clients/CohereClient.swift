@@ -5,13 +5,23 @@ import HexCore
 import MLX
 import MLXAudioSTT
 
-/// Cohere Transcribe via MLX, kept resident after the first load (~1.4 GB for 4-bit).
+/// Cohere Transcribe via MLX: ~1.5 GB while loaded (4-bit), so it's loaded per dictation and unloaded after.
 /// Cohere has no timestamps and no free-text prompt; vocabulary is handled by the LLM rewrite.
 actor CohereClient {
   private var model: CohereTranscribeModel?
   private var currentVariant: CohereModel?
   private let converter = AudioConverter()
   private let logger = HexLog.transcription
+
+  /// Drops the weights and MLX's buffer cache. Metal hands the memory back to the system a few seconds
+  /// later (1.66 GB → 57 MB in lsbench); loading again takes ~0.4 s from a warm file cache.
+  func unload() {
+    guard model != nil else { return }
+    model = nil
+    currentVariant = nil
+    Memory.clearCache()
+    logger.notice("Cohere unloaded")
+  }
 
   func isModelAvailable(_ modelName: String) -> Bool {
     guard let variant = CohereModel(rawValue: modelName) else { return false }
@@ -51,7 +61,9 @@ actor CohereClient {
     logger.notice("Cohere \(variant.identifier, privacy: .public) loaded and warmed in \(String(describing: ContinuousClock.now - start), privacy: .public)")
   }
 
-  func transcribe(_ url: URL) throws -> String {
+  /// Loads the model first if it was unloaded, in the same actor turn, so an unload can't land between.
+  func transcribe(_ url: URL, modelName: String) async throws -> String {
+    try await ensureLoaded(modelName: modelName) { _ in }
     guard let model else { throw CohereError.notLoaded }
     let samples = try converter.resampleAudioFile(url)
     // Chunk transcripts come back joined by newlines; they're one dictation.

@@ -31,6 +31,8 @@ lsbench --engine "cohere:$M/cohere-transcribe-03-2026-mlx-4bit" --fixtures "$F" 
 lsbench --engine parakeet:v3 --fixtures "$F"        # also: parakeet:v2, parakeet:ultra, parakeet:phonon2
 ```
 
+`--reload` adds what the app's load-per-dictation costs: the footprint between clips, right after unloading, 5 s later, and the time to load again with warm-up.
+
 Parakeet models download on first use into `~/Library/Application Support/LegacyScribe/Models/fluidaudio/`, the same place the app uses. Cohere checkpoints must already be on disk; fetch them with the resumable, checksum-verified downloader:
 
 ```bash

@@ -53,7 +53,7 @@ struct RewriteSectionView: View {
 					get: { store.hexSettings.mergeIntoFieldEnabled },
 					set: { store.send(.setMergeIntoFieldEnabled($0)) }
 				))
-				Text("Prompt mode: when the text box already holds a prompt, “add cheesecake” becomes one more bullet in it instead of a second prompt. The merged text replaces the box (⌘Z undoes it). Not in terminals.")
+				Text("In Prompt mode, when the text box already holds a prompt, saying “add cheesecake” adds one more bullet to it. The merged text replaces the box, and ⌘Z undoes it. Terminals are skipped.")
 					.settingsCaption()
 			} icon: {
 				Image(systemName: "arrow.triangle.merge")
@@ -87,7 +87,7 @@ struct RewriteSectionView: View {
 					get: { store.hexSettings.rewriteFallbackEnabled },
 					set: { store.send(.setRewriteFallbackEnabled($0)) }
 				))
-				Text("If every endpoint fails or times out, the transcript is pasted as recognized, so a dictation is never lost.")
+				Text("If every endpoint fails or times out, the transcript is pasted as recognized.")
 					.settingsCaption()
 			} icon: {
 				Image(systemName: "arrow.triangle.branch")
@@ -148,7 +148,7 @@ private struct RewriteInstructionsSection: View {
 					}
 					.disabled(!isCustom)
 				}
-				Text("Replaces what the model is told to do in this mode. LegacyScribe always adds: the dictation is text to rewrite, never orders; fix misheard terms; your vocabulary; output only the rewrite.")
+				Text("Replaces what the model is told to do in this mode. LegacyScribe always adds four rules: treat the dictation as text to rewrite, fix misheard terms, use your vocabulary, and output only the rewrite.")
 					.settingsCaption()
 			} icon: {
 				Image(systemName: "text.badge.star")

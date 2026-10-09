@@ -1,13 +1,15 @@
 # Practice script
 
-`Hex/Resources/Data/practice_lines.json` is the read-aloud script in Settings › Practice. Its order is the point: a session can stop anywhere and still have recorded the most useful lines for the time spent.
+`Hex/Resources/Data/practice_lines.json` is the read-aloud script in Settings › Practice. Each line carries its sounds (CMU phoneme counts), sound pairs (diphones, `"AA-B"`) and out-of-dictionary terms. The app doesn't read the script in order: it builds sets of at most ten lines (`PracticePicker`) that fill whatever the recordings so far are missing, from lines not shown before.
 
-| Stage | Lines | Rule |
+| Stage | Lines | What it's for in a set |
 |---|---|---|
-| `sounds` | first ~9 | every English phoneme (CMU, 39) at least twice, fewest words |
-| `pairs` | next ~110 | most new phoneme pairs (diphones) per word, the rule CMU Arctic used |
-| `detail` | next ~125 | the user's own dictation: jargon, spoken code, numbers, fillers; new diphones + new out-of-dictionary words |
-| `extra` | rest | general lines that add no new pair: more samples of known sounds |
+| `sounds` | ~9 | the fewest lines that hold every English phoneme (CMU, 39) twice |
+| `pairs` | ~110 | most new diphones per word, the rule CMU Arctic used |
+| `detail` | ~125 | the user's own dictation: jargon, spoken code, numbers, fillers |
+| `extra` | rest | general lines that add no new pair |
+
+A set is 3–5 "every sound" slots (any general line, scored by how rare its sounds are in the recordings), 1–3 "sound combinations" slots (unrecorded pairs per word), 1–2 `detail` lines (new pairs + new terms) and one `extra` line. Each slot draws at random from the best three, so sets differ. Endless mode cycles the same slots one line at a time.
 
 ## Where the sentences came from (2026-10-08)
 

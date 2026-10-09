@@ -9,6 +9,12 @@ protocol BenchEngine {
     /// Load weights and run one throwaway inference so later timings are warm.
     func load(warmup: [Float]) async throws
     func transcribe(_ samples: [Float]) async throws -> String
+    /// Drops the weights, so a reload can be timed.
+    func unload()
+}
+
+extension BenchEngine {
+    func unload() {}
 }
 
 final class CohereMLXEngine: BenchEngine {
@@ -36,6 +42,11 @@ final class CohereMLXEngine: BenchEngine {
             generationParameters: STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
         )
         return output.text.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    func unload() {
+        model = nil
+        Memory.clearCache()
     }
 }
 

@@ -38,6 +38,9 @@ struct TranscriptionClient {
 
   /// Lists all model variants found in `argmaxinc/whisperkit-coreml`.
   var getAvailableModels: @Sendable () async throws -> [String]
+
+  /// Loads a downloaded model ahead of use: the talk key went down, so it loads while the user speaks.
+  var prewarm: @Sendable (String) async -> Void = { _ in }
 }
 
 extension TranscriptionClient: DependencyKey {
@@ -45,11 +48,15 @@ extension TranscriptionClient: DependencyKey {
     let live = TranscriptionClientLive()
     return Self(
       transcribe: { try await live.transcribe(url: $0, model: $1, options: $2, progressCallback: $3) },
-      downloadModel: { try await live.downloadAndLoadModel(variant: $0, progressCallback: $1) },
+      downloadModel: {
+        try await live.downloadAndLoadModel(variant: $0, progressCallback: $1)
+        await live.releaseMemory()
+      },
       deleteModel: { try await live.deleteModel(variant: $0) },
       isModelDownloaded: { await live.isModelDownloaded($0) },
       getRecommendedModels: { await live.getRecommendedModels() },
-      getAvailableModels: { try await live.getAvailableModels() }
+      getAvailableModels: { try await live.getAvailableModels() },
+      prewarm: { await live.prewarm($0) }
     )
   }
 }
@@ -235,6 +242,26 @@ actor TranscriptionClientLive {
     return names
   }
 
+  // MARK: - Memory
+
+  // The app waits in the background between dictations. Cohere holds ~1.5 GB of MLX memory while
+  // loaded, so it loads when the talk key goes down (~0.4 s, while the user speaks) and is dropped as
+  // soon as the text is out. Parakeet and WhisperKit run through Core ML and stay loaded: their memory
+  // sits mostly outside the app, and a Core ML reload can take seconds.
+
+  func prewarm(_ model: String) async {
+    guard isCohere(model), await isModelDownloaded(model) else { return }
+    do {
+      try await downloadAndLoadModel(variant: model) { _ in }
+    } catch {
+      modelsLogger.error("Prewarm of \(model, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  func releaseMemory() async {
+    await cohere.unload()
+  }
+
   /// Transcribes the audio file at `url` using a `model` name.
   /// If the model is not yet loaded (or if it differs from the current model), it is downloaded and loaded first.
   /// Transcription progress can be monitored via `progressCallback`.
@@ -244,11 +271,27 @@ actor TranscriptionClientLive {
     options: DecodingOptions,
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
+    do {
+      let text = try await transcribeLoaded(url: url, model: model, options: options, progressCallback: progressCallback)
+      await releaseMemory()
+      return text
+    } catch {
+      await releaseMemory()
+      throw error
+    }
+  }
+
+  private func transcribeLoaded(
+    url: URL,
+    model: String,
+    options: DecodingOptions,
+    progressCallback: @escaping (Progress) -> Void
+  ) async throws -> String {
     let startAll = Date()
     if isCohere(model) {
       try await downloadAndLoadModel(variant: model, progressCallback: progressCallback)
       let startTx = Date()
-      let text = try await cohere.transcribe(url)
+      let text = try await cohere.transcribe(url, modelName: model)
       transcriptionLogger.info("Cohere transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
       return text
     }
