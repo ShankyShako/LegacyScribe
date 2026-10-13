@@ -4,6 +4,7 @@ import Foundation
 import MLX
 
 // lsbench --engine <id> --fixtures <dir> [--runs N] [--json out.json] [--cohere-chunk SECONDS] [--reload]
+// lsbench rewrite --model <mlx-dir> --samples <file.jsonl> [--json out.json] [--no-think]   (see RewriteBench.swift)
 //
 // --reload: after the runs, unload the model and report the footprint right after and 5 s later
 // (Metal returns memory lazily), then time a reload with warm-up.
@@ -74,6 +75,7 @@ func makeEngine(_ spec: String, cohereChunkSeconds: Float?) throws -> BenchEngin
         let modelDir = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
         if let cohereChunkSeconds { return CohereMLXEngine(modelDir: modelDir, chunkSeconds: cohereChunkSeconds) }
         return CohereMLXEngine(modelDir: modelDir)
+    case ("apple", _): return AppleSpeechBenchEngine()
     case ("parakeet", "v2"): return ParakeetEngine(version: .v2, label: "v2", modelsRoot: modelsRoot)
     case ("parakeet", "v3"): return ParakeetEngine(version: .v3, label: "v3", modelsRoot: modelsRoot)
     case ("parakeet", "ultra"): return ParakeetEngine(version: .ultra, label: "ultra", modelsRoot: modelsRoot)
@@ -95,7 +97,7 @@ func run() async throws {
         return args[i + 1]
     }
     guard let engineSpec = option("--engine"), let fixturesPath = option("--fixtures") else {
-        throw BenchError.usage("usage: lsbench --engine <cohere:DIR|parakeet:v2|v3|ultra|phonon2> --fixtures DIR [--runs N] [--json FILE]")
+        throw BenchError.usage("usage: lsbench --engine <cohere:DIR|parakeet:v2|v3|ultra|phonon2|apple> --fixtures DIR [--runs N] [--json FILE]")
     }
     let runs = option("--runs").flatMap(Int.init) ?? 3
     let jsonPath = option("--json")
@@ -174,7 +176,15 @@ extension Duration {
 }
 
 do {
-    try await run()
+    if CommandLine.arguments.dropFirst().first == "rewrite" {
+        try await runRewriteBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "vad" {
+        try await runVadBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "align" {
+        try await runAlignBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else {
+        try await run()
+    }
 } catch {
     FileHandle.standardError.write("lsbench: \(error)\n".data(using: .utf8)!)
     exit(1)

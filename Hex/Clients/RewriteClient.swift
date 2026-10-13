@@ -3,12 +3,13 @@ import DependenciesMacros
 import Foundation
 import HexCore
 
-/// Talks to OpenAI-compatible chat endpoints (OmniRoute, Ollama, …) for the LLM rewrite step.
+/// Runs the LLM rewrite step on whichever provider an endpoint names: OpenAI-compatible APIs (OpenAI, Gemini,
+/// Groq, OpenRouter, Ollama, custom servers), Anthropic's Messages API, or the on-device model.
 @DependencyClient
 struct RewriteClient {
 	/// One chat completion. Throws on HTTP errors, a cut-off answer, or when `endpoint.timeout` passes.
 	var complete: @Sendable (_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage]) async throws -> String
-	var listModels: @Sendable (_ baseURL: String, _ apiKey: String?) async throws -> [String]
+	var listModels: @Sendable (_ endpoint: RewriteEndpoint, _ apiKey: String?) async throws -> [String]
 	/// A streamed completion for long answers (OmniRoute cuts non-streamed calls at 30 s). Yields the text
 	/// so far after each chunk; `endpoint.timeout` caps the whole call.
 	var stream: @Sendable (_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> = { _, _, _ in
@@ -34,32 +35,78 @@ extension RewriteClient: DependencyKey {
 			return data
 		}
 
-		return Self(
-			complete: { endpoint, apiKey, messages in
-				let effort = endpoint.reasoningEffort.trimmingCharacters(in: .whitespaces)
-				let body = ChatCompletionAPI.Request(
+		@Sendable func openAICompletion(_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage], effort: String?) async throws -> String {
+			var body = ChatCompletionAPI.Request(
+				model: endpoint.model.trimmingCharacters(in: .whitespaces),
+				messages: messages,
+				reasoningEffort: effort
+			)
+			body.adapt(for: endpoint.provider)
+			let request = try ChatCompletionAPI.chatRequest(
+				baseURL: endpoint.resolvedBaseURL,
+				apiKey: apiKey,
+				body: body,
+				timeout: endpoint.timeout
+			)
+			// URLRequest's timeout resets on every received packet; this caps the whole call.
+			let data = try await withDeadline(seconds: endpoint.timeout) { try await fetch(request) }
+			return try ChatCompletionAPI.content(from: data)
+		}
+
+		@Sendable func complete(_ endpoint: RewriteEndpoint, _ apiKey: String?, _ messages: [ChatMessage]) async throws -> String {
+			switch endpoint.provider.wire {
+			case .onDevice:
+				return try await withDeadline(seconds: endpoint.timeout) {
+					try await LocalLLM.shared.complete(repository: endpoint.model, messages: messages)
+				}
+			case .anthropic:
+				let request = try AnthropicMessagesAPI.messagesRequest(
+					baseURL: endpoint.resolvedBaseURL,
+					apiKey: apiKey,
 					model: endpoint.model.trimmingCharacters(in: .whitespaces),
 					messages: messages,
-					reasoningEffort: effort.isEmpty ? nil : effort
-				)
-				let request = try ChatCompletionAPI.chatRequest(
-					baseURL: endpoint.baseURL,
-					apiKey: apiKey,
-					body: body,
 					timeout: endpoint.timeout
 				)
-				// URLRequest's timeout resets on every received packet; this caps the whole call.
 				let data = try await withDeadline(seconds: endpoint.timeout) { try await fetch(request) }
-				return try ChatCompletionAPI.content(from: data)
-			},
-			listModels: { baseURL, apiKey in
-				let data = try await fetch(try ChatCompletionAPI.modelsRequest(baseURL: baseURL, apiKey: apiKey))
-				return try ChatCompletionAPI.modelIDs(from: data)
+				return try AnthropicMessagesAPI.content(from: data)
+			case .openAI:
+				let effort = endpoint.reasoningEffort.trimmingCharacters(in: .whitespaces)
+				do {
+					return try await openAICompletion(endpoint, apiKey, messages, effort: effort.isEmpty ? nil : effort)
+				} catch let ChatCompletionAPI.Failure.http(status, body) where status == 400 && !effort.isEmpty && body.localizedCaseInsensitiveContains("reasoning") {
+					// Models differ in which efforts they take, and providers rename models; one that rejects the
+					// setting still answers without it.
+					HexLog.rewrite.notice("\(endpoint.model, privacy: .public) rejected reasoning effort \(effort, privacy: .public); retrying without it")
+					return try await openAICompletion(endpoint, apiKey, messages, effort: nil)
+				}
+			}
+		}
+
+		return Self(
+			complete: complete,
+			listModels: { endpoint, apiKey in
+				switch endpoint.provider.wire {
+				case .onDevice:
+					return LocalLLMModel.allCases.map(\.repository)
+				case .anthropic:
+					let data = try await fetch(try AnthropicMessagesAPI.modelsRequest(baseURL: endpoint.resolvedBaseURL, apiKey: apiKey))
+					return try ChatCompletionAPI.modelIDs(from: data)
+				case .openAI:
+					let data = try await fetch(try ChatCompletionAPI.modelsRequest(baseURL: endpoint.resolvedBaseURL, apiKey: apiKey))
+					return try ChatCompletionAPI.modelIDs(from: data)
+						.map { $0.hasPrefix("models/") ? String($0.dropFirst(7)) : $0 }
+				}
 			},
 			stream: { endpoint, apiKey, messages in
 				AsyncThrowingStream { continuation in
 					let task = Task {
 						do {
+							// Only OpenAI-style servers stream here; the others answer in one piece.
+							guard endpoint.provider.wire == .openAI else {
+								continuation.yield(try await complete(endpoint, apiKey, messages))
+								continuation.finish()
+								return
+							}
 							let effort = endpoint.reasoningEffort.trimmingCharacters(in: .whitespaces)
 							var body = ChatCompletionAPI.Request(
 								model: endpoint.model.trimmingCharacters(in: .whitespaces),
@@ -67,8 +114,9 @@ extension RewriteClient: DependencyKey {
 								reasoningEffort: effort.isEmpty ? nil : effort
 							)
 							body.stream = true
+							body.adapt(for: endpoint.provider)
 							let request = try ChatCompletionAPI.chatRequest(
-								baseURL: endpoint.baseURL,
+								baseURL: endpoint.resolvedBaseURL,
 								apiKey: apiKey,
 								body: body,
 								timeout: endpoint.timeout

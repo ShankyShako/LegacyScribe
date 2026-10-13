@@ -6,6 +6,8 @@ import HexCore
 struct HistorySectionView: View {
 	@ObserveInjection var inject
 	@Bindable var store: StoreOf<SettingsFeature>
+	/// Space used by `Recordings/`, read when the section appears or the retention changes.
+	@State private var recordingsSizeText: String?
 
 	var body: some View {
 		Section {
@@ -49,6 +51,34 @@ struct HistorySectionView: View {
 					Text("Oldest entries will be automatically deleted when limit is reached")
 						.settingsCaption()
 						.padding(.leading, 28)
+				}
+
+				Label {
+					HStack {
+						Text("Keep Recordings")
+						Spacer()
+						Picker("", selection: Binding(
+							get: { store.hexSettings.audioRetentionDays },
+							set: { store.send(.setAudioRetentionDays($0)) }
+						)) {
+							Text("7 days").tag(7)
+							Text("14 days").tag(14)
+							Text("30 days").tag(30)
+							Text("90 days").tag(90)
+							Text("1 year").tag(365)
+							Text("Forever").tag(0)
+						}
+						.pickerStyle(.menu)
+						.frame(width: 120)
+					}
+					Text("Older audio is deleted; the text stays in history. Recordings you corrected before sending are kept.\(recordingsSizeText.map { " Recordings use \($0)." } ?? "")")
+						.settingsCaption()
+						.task(id: store.hexSettings.audioRetentionDays) {
+							let bytes = await Task.detached(priority: .utility) { AudioRetentionSweep.recordingsSize() }.value
+							recordingsSizeText = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+						}
+				} icon: {
+					Image(systemName: "waveform")
 				}
 
 				PasteLastTranscriptHotkeyRow(store: store)

@@ -22,6 +22,9 @@ public enum HexLog {
     case latency = "Latency"
     case rewrite = "Rewrite"
     case learning = "Learning"
+    case notes = "Notes"
+    case updates = "Updates"
+    case network = "Network"
   }
 
   public static func logger(_ category: Category) -> os.Logger {
@@ -45,6 +48,9 @@ public enum HexLog {
   public static let latency = logger(.latency)
   public static let rewrite = logger(.rewrite)
   public static let learning = logger(.learning)
+  public static let notes = logger(.notes)
+  public static let updates = logger(.updates)
+  public static let network = logger(.network)
   /// Dictation stage events (keyUp → captureStopped → transcribed → postProcessed → pasted); view in Instruments' os_signpost track.
   public static let latencySignposter = OSSignposter(logger: latency)
 }

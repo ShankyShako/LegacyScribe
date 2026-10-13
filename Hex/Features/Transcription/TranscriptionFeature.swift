@@ -30,13 +30,27 @@ struct TranscriptionFeature {
     var rewriteFallbackCount = 0
     /// The ⌃⌥ mode switcher's pick while Control is held; nil when it isn't in use.
     var modeCycler: ModeCyclerBar?
+    /// The notes session being recorded (Notes mode: tap the talk key to start, tap again to stop).
+    var notesRecording: NotesRecording?
+    /// The latest notice for the pill (notes, a kept failed dictation); a new `serial` shows it again.
+    var notice: NoticeRequest?
     var error: String?
     var recordingStartTime: Date?
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
     var sourceAppBundleID: String?
     var sourceAppName: String?
+    /// The focused field when the talk key went down: its names become spelling hints (`ContextTerms`), and
+    /// a Legacy dictation edits its selection or writes into it.
+    var fieldContext: FocusedText?
+    /// `fieldContext` kept past key-up for a Legacy dictation.
+    var superField: FocusedText?
+    /// This dictation is a Legacy instruction; the pill says so until the answer is pasted or fails.
+    var superActive = false
+    /// Spelling hints for this dictation, built at key-up.
+    var biasing: BiasingContext = .empty
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
+    @Shared(.isNotesRecording) var isNotesRecording: Bool = false
     @Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
   }
@@ -60,13 +74,33 @@ struct TranscriptionFeature {
     // Transcription result flow
     case transcriptionResult(String, URL, TimeInterval, DictationTimeline)
     case transcriptionError(Error, URL?)
+    /// Speech-to-text failed on a captured recording, which is kept in History for Retry.
+    case transcriptionFailed(Error, URL, TimeInterval)
+    case failedDictationKept
     case rewriteStateChanged(Bool)
+    case fieldContextCaptured(FocusedText?)
     case rewriteFellBack
+    /// Apple Speech's peek at the first seconds of the recording did (or didn't) hear "legacy".
+    case superHeard(Bool)
+    /// A Legacy dictation ended; the notice says why when nothing was pasted.
+    case superFinished(DictationNotice?)
     case modeCycler(ModeCycler.Output)
     case modeCyclerReveal
 
     // Model availability
     case modelMissing
+
+    // Notes sessions
+    case notesTapped
+    case notesStarted(String)
+    case notesStartFailed(String)
+    case notesStop
+    case notesWarn
+    case notesCaptureFailed(String)
+    case notesSilent
+
+    /// A `legacyscribe://` URL (`HexAppDelegate.application(_:open:)`).
+    case urlAction(URLAction)
   }
 
   enum CancelID {
@@ -75,6 +109,9 @@ struct TranscriptionFeature {
     case recordingCleanup
     case transcription
     case modeCyclerReveal
+    case notesMetering
+    case notesTimer
+    case superPeek
   }
 
   @Dependency(\.transcription) var transcription
@@ -85,10 +122,13 @@ struct TranscriptionFeature {
   @Dependency(\.sleepManagement) var sleepManagement
   @Dependency(\.date.now) var now
   @Dependency(\.transcriptPersistence) var transcriptPersistence
-  @Dependency(\.rewrite) var rewrite
-  @Dependency(\.keychain) var keychain
+  @Dependency(\.localLLM) var localLLM
+  /// Word fixes and the rewrite chain, shared with History's Retry.
+  let rewriter = TranscriptRewriter()
   @Dependency(\.codeTalk) var codeTalk
   @Dependency(\.focusedText) var focusedText
+  @Dependency(\.speechPeek) var speechPeek
+  @Dependency(\.notes) var notes
 
   var body: some ReducerOf<Self> {
     Reduce { state, action in
@@ -105,6 +145,7 @@ struct TranscriptionFeature {
           startHotKeyMonitoringEffect(),
           startModeCyclerEffect(),
           startSentEditCaptureEffect(),
+          startNotesEventsEffect(),
           warmUpRecorderEffect()
         )
 
@@ -143,8 +184,34 @@ struct TranscriptionFeature {
         state.isRewriting = isRewriting
         return .none
 
+      case let .fieldContextCaptured(field):
+        // Only for the dictation it was read for.
+        guard state.isRecording else { return .none }
+        state.fieldContext = field
+        if let field, field.selectionLength > 0, state.hexSettings.superEnabled,
+           state.hexSettings.superHintsShown < SuperTrigger.hintLimit {
+          state.$hexSettings.withLock { $0.superHintsShown += 1 }
+          state.showNotice(.superHint)
+        }
+        return .none
+
       case .rewriteFellBack:
         state.rewriteFallbackCount += 1
+        return .none
+
+      case let .superHeard(isSuper):
+        // The final transcript decides; this only changes the look while recording.
+        guard state.isRecording, state.superActive != isSuper else { return .none }
+        state.superActive = isSuper
+        transcriptionFeatureLogger.info("Legacy \(isSuper ? "heard" : "not heard", privacy: .public) early")
+        let settings = state.hexSettings
+        // Raw mode doesn't warm the on-device model at key-down; Legacy needs it.
+        guard isSuper, !settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return .none }
+        return .run { [localLLM] _ in await localLLM.prewarm(settings.rewritePrimary.model) }
+
+      case let .superFinished(notice):
+        state.superActive = false
+        if let notice { state.showNotice(notice) }
         return .none
 
       case let .modeCycler(output):
@@ -154,15 +221,77 @@ struct TranscriptionFeature {
         state.modeCycler?.isVisible = true
         return .none
 
+      case let .transcriptionFailed(error, audioURL, duration):
+        return handleTranscriptionFailed(&state, error: error, audioURL: audioURL, duration: duration)
+
+      case .failedDictationKept:
+        state.showNotice(.dictationKept)
+        return .none
+
       case let .transcriptionError(error, audioURL):
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
 
       case .modelMissing:
         return .none
 
+      // MARK: - Notes Sessions
+
+      case .notesTapped:
+        if let session = state.notesRecording {
+          // A habitual double-tap shouldn't end the session it just started.
+          guard now.timeIntervalSince(session.startedAt) > 0.6 else { return .none }
+          return handleNotesStop(&state)
+        }
+        guard !state.isRecording else { return .none }
+        return handleNotesStart(&state)
+
+      case let .notesStarted(id):
+        state.notesRecording?.id = id
+        return state.notesRecording?.stopRequested == true ? handleNotesStop(&state) : .none
+
+      case let .notesStartFailed(message):
+        state.notesRecording = nil
+        state.$isNotesRecording.withLock { $0 = false }
+        state.meter = .init(averagePower: 0, peakPower: 0)
+        state.showNotice(.notesProblem(message))
+        return .merge(
+          .cancel(id: CancelID.notesMetering),
+          .cancel(id: CancelID.notesTimer),
+          .run { [sleepManagement] _ in
+            soundEffect.play(.cancel)
+            await sleepManagement.allowSleep()
+          }
+        )
+
+      case .notesStop:
+        return handleNotesStop(&state)
+
+      case .notesWarn:
+        guard state.notesRecording != nil else { return .none }
+        state.showNotice(.notesEnding)
+        return .none
+
+      case let .notesCaptureFailed(message):
+        guard state.notesRecording != nil else { return .none }
+        state.showNotice(.notesProblem(message))
+        return .none
+
+      case .notesSilent:
+        guard state.notesRecording != nil else { return .none }
+        let stop = handleNotesStop(&state)
+        state.showNotice(.notesStoppedSilent)
+        return stop
+
+      case let .urlAction(action):
+        return handleURLAction(&state, action)
+
       // MARK: - Cancel/Discard Flow
 
       case .cancel:
+        // Esc ends a notes session and keeps it.
+        if state.notesRecording != nil {
+          return handleNotesStop(&state)
+        }
         // Only cancel if we're in the middle of recording, transcribing, or post-processing
         guard state.isRecording || state.isTranscribing else {
           return .none
@@ -322,8 +451,10 @@ private extension TranscriptionFeature {
   func startHotKeyMonitoringEffect() -> Effect<Action> {
     .run { send in
       var hotKeyProcessor: HotKeyProcessor = .init(hotkey: HotKey(key: nil, modifiers: [.option]))
+      var notesTaps = NotesTapDetector(hotkey: HotKey(key: nil, modifiers: [.option]))
       @Shared(.isSettingHotKey) var isSettingHotKey: Bool
       @Shared(.hexSettings) var hexSettings: HexSettings
+      @Shared(.isNotesRecording) var isNotesRecording: Bool
 
       // Handle incoming input events (keyboard and mouse)
       let token = keyEventMonitor.handleInputEvent { inputEvent in
@@ -338,6 +469,25 @@ private extension TranscriptionFeature {
         hotKeyProcessor.doubleTapLockEnabled = hexSettings.doubleTapLockEnabled
         hotKeyProcessor.useDoubleTapOnly = useDoubleTapOnly
         hotKeyProcessor.minimumKeyTime = hexSettings.minimumKeyTime
+        notesTaps.hotkey = hexSettings.hotkey
+
+        // Notes mode: a clean tap starts a session and the next one stops it (docs/hotkey-semantics.md).
+        // A dictation already under way (the mode picked mid-dictation) stays with the processor.
+        let notesRecording = isNotesRecording
+        let notesModeIdle = hexSettings.rewriteMode == .notes && hotKeyProcessor.state == .idle
+        if case let .keyboard(keyEvent) = inputEvent, notesRecording || notesModeIdle {
+          let wasHeld = notesTaps.isHeld
+          switch notesTaps.process(keyEvent) {
+          case .tapped:
+            Task { await send(.notesTapped) }
+          case .escape:
+            Task { await send(.cancel) }
+          case nil:
+            break
+          }
+          // A key hotkey's own key is swallowed, as it is for dictation.
+          return keyEvent.key != nil && keyEvent.key == hexSettings.hotkey.key && (wasHeld || notesTaps.isHeld)
+        }
 
         switch inputEvent {
         case .keyboard(let keyEvent):
@@ -407,6 +557,19 @@ private extension TranscriptionFeature {
     }
   }
 
+  /// Capture problems, and a session nobody is talking in, reported while a notes session records.
+  func startNotesEventsEffect() -> Effect<Action> {
+    .run { send in
+      for await event in notes.events() {
+        switch event {
+        case let .captureFailed(message): await send(.notesCaptureFailed(message))
+        case .silenceLimitReached: await send(.notesSilent)
+        case .changed: break
+        }
+      }
+    }
+  }
+
   func warmUpRecorderEffect() -> Effect<Action> {
     .run { _ in
       await recording.warmUpRecorder()
@@ -432,6 +595,93 @@ private extension TranscriptionFeature {
   }
 }
 
+// MARK: - Notes Handlers
+
+private extension TranscriptionFeature {
+  func handleNotesStart(_ state: inout State) -> Effect<Action> {
+    state.notesRecording = NotesRecording(startedAt: now)
+    state.$isNotesRecording.withLock { $0 = true }
+    transcriptionFeatureLogger.notice("Notes session requested")
+    return .merge(
+      .run { [notes, sleepManagement] send in
+        soundEffect.play(.startRecording)
+        // Hands-free for up to 2 h: idle sleep would end it.
+        await sleepManagement.preventSleep(reason: "LegacyScribe notes session")
+        do {
+          await send(.notesStarted(try await notes.start()))
+        } catch {
+          transcriptionFeatureLogger.error("Notes session failed to start: \(error.localizedDescription, privacy: .public)")
+          await send(.notesStartFailed(error.localizedDescription))
+        }
+      },
+      .run { [notes] send in
+        for await meter in notes.meters() {
+          await send(.audioLevelUpdated(meter))
+        }
+      }
+      .cancellable(id: CancelID.notesMetering, cancelInFlight: true),
+      .run { send in
+        try await Task.sleep(for: .seconds(NotesSession.maxDuration - NotesSession.warningLead))
+        await send(.notesWarn)
+        try await Task.sleep(for: .seconds(NotesSession.warningLead))
+        await send(.notesStop)
+      }
+      .cancellable(id: CancelID.notesTimer, cancelInFlight: true)
+    )
+  }
+
+  /// Stops capture and keeps the session; its transcript and notes are finished in the background.
+  func handleNotesStop(_ state: inout State) -> Effect<Action> {
+    guard let session = state.notesRecording else { return .none }
+    guard session.id != nil else {
+      // Still starting: stop as soon as capture is up.
+      state.notesRecording?.stopRequested = true
+      return .none
+    }
+    state.notesRecording = nil
+    state.$isNotesRecording.withLock { $0 = false }
+    state.meter = .init(averagePower: 0, peakPower: 0)
+    state.showNotice(.notesSaved)
+    return .merge(
+      .cancel(id: CancelID.notesMetering),
+      .cancel(id: CancelID.notesTimer),
+      .run { [notes, sleepManagement] _ in
+        await notes.stop()
+        soundEffect.play(.stopRecording)
+        await sleepManagement.allowSleep()
+      }
+    )
+  }
+}
+
+struct NotesRecording: Equatable {
+  /// Nil until capture is running.
+  var id: String?
+  var startedAt: Date
+  /// A stop that came while the session was still starting.
+  var stopRequested = false
+}
+
+struct NoticeRequest: Equatable {
+  var notice: DictationNotice
+  var serial: Int
+}
+
+extension TranscriptionFeature.State {
+  mutating func showNotice(_ notice: DictationNotice) {
+    self.notice = NoticeRequest(notice: notice, serial: (self.notice?.serial ?? 0) + 1)
+  }
+}
+
+extension SharedReaderKey
+  where Self == InMemoryKey<Bool>.Default
+{
+  /// True while a notes session records; the hotkey monitor then sends the talk key to it.
+  static var isNotesRecording: Self {
+    Self[.inMemory("isNotesRecording"), default: false]
+  }
+}
+
 // MARK: - Recording Handlers
 
 private extension TranscriptionFeature {
@@ -451,6 +701,7 @@ private extension TranscriptionFeature {
       state.sourceAppBundleID = activeApp.bundleIdentifier
       state.sourceAppName = activeApp.localizedName
     }
+    state.fieldContext = nil
     transcriptionFeatureLogger.notice("Recording started at \(startTime.ISO8601Format())")
 
     // Prevent system sleep during recording
@@ -459,6 +710,31 @@ private extension TranscriptionFeature {
       // An idle-unloaded model loads again while the user speaks (~0.4 s for Cohere).
       .run { [transcription, model = state.hexSettings.selectedModel] _ in
         await transcription.prewarm(model)
+      },
+      // The text around the cursor, read before focus can move: its names become spelling hints, and a
+      // Legacy dictation edits the selection.
+      .run { [focusedText, enabled = state.hexSettings.contextTermsEnabled || state.hexSettings.superEnabled] send in
+        guard enabled, let field = focusedText.read() else { return }
+        await send(.fieldContextCaptured(field))
+      },
+      // Legacy shows about a second after "legacy" is said: Apple Speech peeks at the start of the dictation.
+      .run { [speechPeek, recording, enabled = state.hexSettings.superEnabled && state.hexSettings.superEarlyDetection] send in
+        guard enabled, await speechPeek.isAvailable() else { return }
+        let started = ContinuousClock.now
+        for offset in SuperTrigger.peekSeconds {
+          try await Task.sleep(until: started + .seconds(offset), clock: .continuous)
+          let head = await recording.recordingHead()
+          guard !head.isEmpty, let text = await speechPeek.transcribe(head) else { continue }
+          let verdict = SuperTrigger.earlyVerdict(text)
+          if let isSuper = verdict.isSuper { await send(.superHeard(isSuper)) }
+          if verdict.isSettled { return }
+        }
+      }
+      .cancellable(id: CancelID.superPeek, cancelInFlight: true),
+      // The on-device rewrite model loads while the user speaks too.
+      .run { [localLLM, settings = state.hexSettings] _ in
+        guard settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return }
+        await localLLM.prewarm(settings.rewritePrimary.model)
       },
       .run { [sleepManagement, preventSleep = state.hexSettings.preventSystemSleep] _ in
         // Play sound immediately for instant feedback
@@ -525,6 +801,20 @@ private extension TranscriptionFeature {
       )
     }
 
+    @Shared(.sentEdits) var sentEdits: SentEditLog
+    let field = state.hexSettings.contextTermsEnabled ? state.fieldContext : nil
+    state.superField = state.hexSettings.superEnabled ? state.fieldContext : nil
+    state.biasing = BiasingContext.build(
+      vocabulary: state.hexSettings.vocabulary,
+      sentEdits: sentEdits.edits,
+      field: field.map { (text: $0.value, cursor: $0.cursor) }
+    )
+    state.fieldContext = nil
+    if !state.biasing.isEmpty {
+      let (vocabulary, fixed, nearby) = (state.biasing.vocabulary.count, state.biasing.corrections.count, state.biasing.nearby.count)
+      HexLog.rewrite.info("Spelling hints: \(vocabulary) vocabulary, \(fixed) fixed, \(nearby) nearby")
+    }
+
     // Otherwise, proceed to transcription
     state.isTranscribing = true
     state.error = nil
@@ -534,6 +824,7 @@ private extension TranscriptionFeature {
 
     return .merge(
       .cancel(id: CancelID.recordingStart),
+      .cancel(id: CancelID.superPeek),
       .run { [sleepManagement] send in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
@@ -584,7 +875,13 @@ private extension TranscriptionFeature {
           await send(.transcriptionResult(result, capturedURL, duration, timeline))
         } catch {
           transcriptionFeatureLogger.error("Transcription failed: \(error.localizedDescription)")
-          await send(.transcriptionError(error, nil))
+          // Esc cancels the dictation and its recording; any other failure keeps the recording for Retry.
+          if !Task.isCancelled, !(error is CancellationError), let kept = audioURL {
+            audioURL = nil
+            await send(.transcriptionFailed(error, kept, duration))
+          } else {
+            await send(.transcriptionError(error, nil))
+          }
         }
       }
       .cancellable(id: CancelID.transcription)
@@ -604,6 +901,8 @@ private extension TranscriptionFeature {
   ) -> Effect<Action> {
     state.isTranscribing = false
     state.isPrewarming = false
+    // The early look ends here; a Legacy transcript turns it back on below.
+    state.superActive = false
 
     // Check for force quit command (emergency escape hatch)
     if ForceQuitCommandDetector.matches(result) {
@@ -624,6 +923,15 @@ private extension TranscriptionFeature {
     }
 
     transcriptionFeatureLogger.info("Raw transcription: '\(result, privacy: .private)'")
+    let superField = state.superField
+    state.superField = nil
+    if state.hexSettings.superEnabled, !state.isRemappingScratchpadFocused,
+       let instruction = SuperTrigger.instruction(in: result) {
+      return handleSuper(
+        &state, instruction: instruction, recognized: result, field: superField,
+        audioURL: audioURL, duration: duration, timeline: timeline
+      )
+    }
     let settings = state.hexSettings
     let skipModifications = state.isRemappingScratchpadFocused
     if skipModifications {
@@ -632,13 +940,15 @@ private extension TranscriptionFeature {
 
     let sourceAppBundleID = state.sourceAppBundleID
     let sourceAppName = state.sourceAppName
+    let biasing = state.biasing
     let transcriptionHistory = state.$transcriptionHistory
     let engine = settings.selectedModel
-    let rewriteMode = skipModifications ? RewriteMode.raw : settings.rewriteMode
+    // Notes mode never reaches here unless it was picked mid-dictation; that dictation pastes as recognized.
+    let rewriteMode = skipModifications || !settings.rewriteMode.rewrites ? RewriteMode.raw : settings.rewriteMode
 
     return .run { send in
       var timeline = timeline
-      var output = skipModifications ? result : applyWordModifications(result, settings: settings)
+      var output = skipModifications ? result : rewriter.applyWordModifications(result, settings: settings)
       var appliedRewrite: RewriteMode?
       var rewriteOutcome: RewriteOutcome?
 
@@ -666,10 +976,11 @@ private extension TranscriptionFeature {
 
       if rewriteMode != .raw, !output.isEmpty {
         await send(.rewriteStateChanged(true))
-        let outcome = await rewriteTranscript(
+        let outcome = await rewriter.rewrite(
           output,
           mode: rewriteMode,
           settings: settings,
+          biasing: biasing,
           targetAppName: sourceAppName,
           codeTalkCommands: codeTalkCommands,
           existingText: mergeBase
@@ -691,6 +1002,12 @@ private extension TranscriptionFeature {
         } else if !outcome.failures.isEmpty {
           await send(.rewriteFellBack)
         }
+      }
+      // Like Cohere, the on-device model is loaded per dictation (warmed at key-down) and doesn't stay
+      // resident, whether or not this dictation ended up rewritten.
+      if settings.rewritePrimary.provider == .onDevice
+        || (settings.rewriteFallbackEnabled && settings.rewriteFallback.provider == .onDevice) {
+        Task { [localLLM] in await localLLM.unload() }
       }
       if let leadingCommand {
         output = CodeTalk.join(leadingCommand, rewrittenRemainder: output)
@@ -721,6 +1038,9 @@ private extension TranscriptionFeature {
           rewriteOutcome: rewriteOutcome,
           recognized: result,
           replaceField: replaceField,
+          // A leading slash command must reach the app as typed; the scratchpad takes the text as is.
+          matchSurroundings: !skipModifications && leadingCommand == nil,
+          knownSpellings: biasing.vocabulary + biasing.corrections + biasing.nearby,
           duration: duration,
           sourceAppBundleID: sourceAppBundleID,
           sourceAppName: sourceAppName,
@@ -736,59 +1056,119 @@ private extension TranscriptionFeature {
     .cancellable(id: CancelID.transcription)
   }
 
-  /// Word removals then remappings, as configured in Settings.
-  func applyWordModifications(_ text: String, settings: HexSettings) -> String {
-    var output = text
-    if settings.wordRemovalsEnabled {
-      let removedResult = WordRemovalApplier.apply(output, removals: settings.wordRemovals)
-      if removedResult != output {
-        let enabledRemovalCount = settings.wordRemovals.filter(\.isEnabled).count
-        transcriptionFeatureLogger.info("Applied \(enabledRemovalCount) word removal(s)")
+  /// A dictation that started with "legacy": the rest is an instruction that edits the text selected at
+  /// key-down, or writes at the cursor with the field around it as context. When it fails nothing in the
+  /// field changes: the dictation is copied and kept in History.
+  func handleSuper(
+    _ state: inout State,
+    instruction: String,
+    recognized: String,
+    field: FocusedText?,
+    audioURL: URL,
+    duration: TimeInterval,
+    timeline: DictationTimeline
+  ) -> Effect<Action> {
+    guard !instruction.isEmpty else {
+      transcriptionFeatureLogger.notice("Legacy heard with no instruction after it; nothing to do")
+      state.showNotice(.superFailed("Say what to do after \u{201C}legacy\u{201D}"))
+      return .run { _ in FileManager.default.removeItemIfExists(at: audioURL) }
+    }
+    state.superActive = true
+    let settings = state.hexSettings
+    let (sourceAppBundleID, sourceAppName) = (state.sourceAppBundleID, state.sourceAppName)
+    let biasing = state.biasing
+    let transcriptionHistory = state.$transcriptionHistory
+    let engine = settings.selectedModel
+
+    // Terminals report their scrollback as the field, so Legacy only writes there, without context.
+    var request = SuperRequest.write(before: "", after: "")
+    var problem: String?
+    if let field, field.bundleID == sourceAppBundleID,
+       !(field.bundleID.map(FieldMerge.terminalBundleIDs.contains) ?? false) {
+      if field.selectionLength > 0, let selected = field.selectedText,
+         !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let selection = SuperPrompt.editableSelection(selected) {
+          request = .edit(selection: selection)
+        } else {
+          problem = "Legacy failed: selection over \(SuperPrompt.maxSelectionCharacters.formatted()) characters"
+        }
+      } else if field.selectionLength > 0, field.selectedText == nil {
+        // A paste would replace a selection we can't see.
+        problem = "Legacy failed: couldn\u{2019}t read the selection"
+      } else if let surroundings = field.surroundings {
+        request = .write(before: surroundings.before, after: surroundings.after)
       }
-      output = removedResult
     }
-    let remappedResult = WordRemappingApplier.apply(output, remappings: settings.wordRemappings)
-    if remappedResult != output {
-      transcriptionFeatureLogger.info("Applied \(settings.wordRemappings.count) word remapping(s)")
+    let isEdit = if case .edit = request { true } else { false }
+    HexLog.rewrite.info("Legacy \(isEdit ? "edit" : "write", privacy: .public) in \(sourceAppBundleID ?? "unknown app", privacy: .public)")
+
+    return .run { send in
+      var timeline = timeline
+      var outcome: RewriteOutcome?
+      var failure = problem
+      if failure == nil {
+        let instruction = rewriter.applyWordModifications(instruction, settings: settings)
+        await send(.rewriteStateChanged(true))
+        let answer = await rewriter.superRewrite(
+          instruction, request: request, settings: settings, biasing: biasing, targetAppName: sourceAppName
+        )
+        await send(.rewriteStateChanged(false))
+        timeline.rewritten = stampLatency("rewritten")
+        if settings.rewritePrimary.provider == .onDevice
+          || (settings.rewriteFallbackEnabled && settings.rewriteFallback.provider == .onDevice) {
+          Task { [localLLM] in await localLLM.unload() }
+        }
+        guard !Task.isCancelled else {
+          FileManager.default.removeItemIfExists(at: audioURL)
+          return
+        }
+        outcome = answer
+        if answer.rewrittenBy == nil {
+          failure = answer.failures.isEmpty ? "Legacy needs an AI: set one up in AI Rewrite" : "Legacy failed: nothing changed"
+        } else if case let .edit(selection) = request, !selectionStillHolds(selection, in: field) {
+          HexLog.rewrite.notice("The selection changed while Legacy worked; nothing pasted")
+          failure = "Legacy stopped: the selection changed"
+        }
+      }
+
+      if let failure {
+        await pasteboard.copy(recognized)
+      }
+      do {
+        try await finalizeRecordingAndStoreTranscript(
+          result: failure == nil ? outcome?.text ?? recognized : recognized,
+          rawText: failure == nil ? recognized : nil,
+          rewriteMode: nil,
+          rewriteOutcome: outcome,
+          recognized: recognized,
+          replaceField: false,
+          // An edit replaces the selection as is; new text fits in like any dictation.
+          matchSurroundings: !isEdit,
+          knownSpellings: biasing.vocabulary + biasing.corrections + biasing.nearby,
+          duration: duration,
+          sourceAppBundleID: sourceAppBundleID,
+          sourceAppName: sourceAppName,
+          audioURL: audioURL,
+          transcriptionHistory: transcriptionHistory,
+          timeline: timeline,
+          engine: engine,
+          paste: failure == nil,
+          // The answer isn't what the speaker said, so what's sent after it isn't a correction of it.
+          watchSent: false
+        )
+      } catch {
+        await send(.transcriptionError(error, audioURL))
+      }
+      await send(.superFinished(failure.map(DictationNotice.superFailed)))
     }
-    return remappedResult
+    .cancellable(id: CancelID.transcription)
   }
 
-  /// Primary endpoint, then the fallback; returns the transcript unchanged if both fail,
-  /// so a network problem never costs the dictation.
-  func rewriteTranscript(
-    _ transcript: String,
-    mode: RewriteMode,
-    settings: HexSettings,
-    targetAppName: String?,
-    codeTalkCommands: [String]? = nil,
-    existingText: String? = nil
-  ) async -> RewriteOutcome {
-    var endpoints: [(RewriteEndpointRole, RewriteEndpoint)] = [(.primary, settings.rewritePrimary)]
-    if settings.rewriteFallbackEnabled {
-      endpoints.append((.fallback, settings.rewriteFallback))
-    }
-    let outcome = await RewriteChain.run(
-      transcript: transcript,
-      mode: mode,
-      vocabulary: settings.vocabulary,
-      targetAppName: targetAppName,
-      instructions: settings.customInstructions(for: mode),
-      codeTalkCommands: codeTalkCommands,
-      existingText: existingText,
-      endpoints: endpoints
-    ) { [rewrite, keychain] role, endpoint, messages in
-      try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)
-    }
-    for failure in outcome.failures {
-      HexLog.rewrite.error("Rewrite failed: \(failure, privacy: .public)")
-    }
-    if let model = outcome.rewrittenBy {
-      HexLog.rewrite.info("Rewrote with \(model, privacy: .public) (\(mode.rawValue, privacy: .public))")
-    } else {
-      HexLog.rewrite.notice("Every rewrite endpoint failed; pasting the transcript as recognized")
-    }
-    return outcome
+  /// True when the field still has `selection` selected where it was at key-down, so a paste replaces it.
+  func selectionStillHolds(_ selection: String, in field: FocusedText?) -> Bool {
+    guard let field, let current = focusedText.read() else { return false }
+    return current.bundleID == field.bundleID && current.cursor == field.cursor
+      && current.selectionLength == field.selectionLength && current.selectedText == selection
   }
 
   func handleTranscriptionError(
@@ -798,6 +1178,7 @@ private extension TranscriptionFeature {
   ) -> Effect<Action> {
     state.isTranscribing = false
     state.isPrewarming = false
+    state.superActive = false
     state.error = error.localizedDescription
     
     if let audioURL {
@@ -805,6 +1186,72 @@ private extension TranscriptionFeature {
     }
 
     return .none
+  }
+
+  /// URL actions reuse the hotkey's paths. `stop` and `toggle` end whatever is recording, a dictation or a
+  /// notes session; `start` and `toggle` start a dictation (in Notes mode it pastes as recognized).
+  func handleURLAction(_ state: inout State, _ action: URLAction) -> Effect<Action> {
+    guard state.hexSettings.urlActionsEnabled || !action.canStartRecording else {
+      transcriptionFeatureLogger.notice("Ignored a URL action that starts recording: URL actions are off in Settings")
+      return .none
+    }
+    let busy = state.isRecording || state.notesRecording != nil
+    switch action {
+    case .start:
+      guard !busy, !state.isTranscribing else { return .none }
+      return handleStartRecording(&state)
+    case .stop:
+      if state.isRecording { return handleStopRecording(&state) }
+      return state.notesRecording != nil ? handleNotesStop(&state) : .none
+    case .toggle:
+      if busy { return handleURLAction(&state, .stop) }
+      return handleURLAction(&state, .start)
+    case .cancel:
+      return .send(.cancel)
+    case let .mode(mode):
+      state.$hexSettings.withLock { $0.rewriteMode = mode }
+      return .none
+    case .notesStart:
+      guard !busy else { return .none }
+      return handleNotesStart(&state)
+    case .notesStop:
+      return state.notesRecording != nil ? handleNotesStop(&state) : .none
+    }
+  }
+
+  /// Keeps a recording the engine couldn't transcribe as a History entry with no text and the reason, so
+  /// it can be retried. Nothing is pasted.
+  func handleTranscriptionFailed(
+    _ state: inout State,
+    error: Error,
+    audioURL: URL,
+    duration: TimeInterval
+  ) -> Effect<Action> {
+    let cleanup = handleTranscriptionError(&state, error: error, audioURL: nil)
+    guard state.hexSettings.saveTranscriptionHistory else {
+      FileManager.default.removeItemIfExists(at: audioURL)
+      return cleanup
+    }
+    let reason = error.localizedDescription
+    let (bundleID, appName) = (state.sourceAppBundleID, state.sourceAppName)
+    let history = state.$transcriptionHistory
+    return .merge(
+      cleanup,
+      .run { [transcriptPersistence] send in
+        do {
+          var transcript = try await transcriptPersistence.save("", audioURL, duration, bundleID, appName)
+          transcript.failure = reason
+          history.withLock { $0.history.insert(transcript, at: 0) }
+          transcriptionFeatureLogger.notice("Kept the failed recording in History for Retry")
+          let id = transcript.id
+          Task.detached(priority: .utility) { AudioRetentionSweep.compress(ids: [id]) }
+          await send(.failedDictationKept)
+        } catch {
+          transcriptionFeatureLogger.error("Couldn't keep the failed recording: \(error.localizedDescription)")
+          FileManager.default.removeItemIfExists(at: audioURL)
+        }
+      }
+    )
   }
 
   /// Move file to permanent location, create a transcript record, paste text, and play sound.
@@ -815,13 +1262,17 @@ private extension TranscriptionFeature {
     rewriteOutcome: RewriteOutcome?,
     recognized: String,
     replaceField: Bool,
+    matchSurroundings: Bool,
+    knownSpellings: [String],
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
     audioURL: URL,
     transcriptionHistory: Shared<TranscriptionHistory>,
     timeline: DictationTimeline,
-    engine: String
+    engine: String,
+    paste: Bool = true,
+    watchSent: Bool = true
   ) async throws {
     var timeline = timeline
     var savedTranscriptID: UUID?
@@ -859,13 +1310,46 @@ private extension TranscriptionFeature {
     }
 
     timeline.postProcessed = stampLatency("postProcessed")
+    guard paste else {
+      if let savedTranscriptID {
+        Task.detached(priority: .utility) { AudioRetentionSweep.compress(ids: [savedTranscriptID]) }
+      }
+      return
+    }
 
-    let fieldBeforePaste = hexSettings.captureSentEdits ? focusedText.read() : nil
+    // A merge replaces the whole field, so there's nothing around it to match.
+    let adjustInsertion = hexSettings.matchSurroundingText && matchSurroundings && !replaceField
+    let captureSent = hexSettings.captureSentEdits && watchSent
+    let fieldBeforePaste = captureSent || adjustInsertion ? focusedText.read() : nil
+    // History keeps the text as written; the paste (and the sent-text capture) use the fitted version.
+    var pasted = result
+    if adjustInsertion {
+      // Says why nothing changed, without the text: Accessibility differs a lot between apps.
+      let field = fieldBeforePaste
+      let app = field?.bundleID ?? "unknown app"
+      if let field, let bundleID = field.bundleID, !FieldMerge.terminalBundleIDs.contains(bundleID),
+         let surroundings = field.surroundings {
+        pasted = InsertionAdjuster.adjust(
+          result, before: surroundings.before, after: surroundings.after, keepCapitalized: knownSpellings
+        )
+        transcriptionFeatureLogger.info(
+          "Surrounding text in \(app, privacy: .public): \(surroundings.before.count) chars before, \(surroundings.after.count) after; paste \(pasted == result ? "unchanged" : "adjusted", privacy: .public)"
+        )
+      } else if let field {
+        let reason = field.bundleID.map { FieldMerge.terminalBundleIDs.contains($0) } == true ? "terminal"
+          : field.cursor == nil ? "app reports no cursor" : "cursor outside the field's text"
+        transcriptionFeatureLogger.info(
+          "Surrounding text skipped in \(app, privacy: .public): \(reason, privacy: .public) (value \(field.value.utf16.count) units, cursor \(field.cursor ?? -1), selection \(field.selectionLength))"
+        )
+      } else {
+        transcriptionFeatureLogger.info("Surrounding text skipped: no readable text field is focused (or Accessibility isn't granted)")
+      }
+    }
     if replaceField {
       // Select the field's text so the merged version replaces it (⌘Z in the app undoes this).
       await pasteboard.sendKeyboardCommand(KeyboardCommand(key: .a, modifiers: [.command]))
     }
-    await pasteboard.paste(result)
+    await pasteboard.paste(pasted)
     timeline.pasted = stampLatency("pasted")
     soundEffect.play(.pasteTranscript)
 
@@ -881,10 +1365,15 @@ private extension TranscriptionFeature {
       }
     }
 
-    if let fieldBeforePaste {
+    if let savedTranscriptID {
+      // Kept as FLAC, a quarter of the size; off the hot path, the text is already pasted.
+      Task.detached(priority: .utility) { AudioRetentionSweep.compress(ids: [savedTranscriptID]) }
+    }
+
+    if captureSent, let fieldBeforePaste {
       await watchForSend(
         fieldBefore: fieldBeforePaste,
-        pasted: result,
+        pasted: pasted,
         recognized: recognized,
         mode: rewriteMode,
         transcriptID: savedTranscriptID,
@@ -951,13 +1440,18 @@ private extension TranscriptionFeature {
     state.isRecording = false
     state.isPrewarming = false
     state.isRewriting = false
+    state.superActive = false
+    state.superField = nil
 
     return .merge(
       .cancel(id: CancelID.transcription),
       .cancel(id: CancelID.recordingStart),
-      .run { [sleepManagement] _ in
+      .cancel(id: CancelID.superPeek),
+      .run { [sleepManagement, localLLM] _ in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
+        // The rewrite model warmed at key-down isn't needed now.
+        await localLLM.unload()
         guard wasRecording else {
           soundEffect.play(.cancel)
           return
@@ -977,10 +1471,12 @@ private extension TranscriptionFeature {
   func handleDiscard(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
     state.isPrewarming = false
+    state.superActive = false
 
     // Silently discard - no sound effect
     return .merge(
       .cancel(id: CancelID.recordingStart),
+      .cancel(id: CancelID.superPeek),
       .run { [sleepManagement] _ in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
@@ -1007,7 +1503,9 @@ struct TranscriptionView: View {
   @State private var noticeID = 0
 
   var status: TranscriptionIndicatorView.Status {
-    if store.isTranscribing {
+    if store.notesRecording != nil {
+      return .recording
+    } else if store.isTranscribing {
       return .transcribing
     } else if store.isRewriting && !store.isRecording {
       return .rewriting
@@ -1025,18 +1523,23 @@ struct TranscriptionView: View {
     return bar.highlight
   }
 
-  /// A one-off notice wins; otherwise a non-Clean mode is tagged while recording.
+  /// A one-off notice wins, then Legacy; otherwise a non-Clean mode is tagged while recording.
   private var visibleNotice: DictationNotice? {
     if let notice { return notice }
+    if store.superActive { return .superOn }
+    if let notes = store.notesRecording { return .notesRecording(since: notes.startedAt) }
     let mode = store.hexSettings.rewriteMode
-    return store.isRecording && mode != .clean ? .recordingIn(mode) : nil
+    guard store.isRecording else { return nil }
+    if store.hexSettings.privateMode { return .recordingPrivate(mode) }
+    return mode != .clean ? .recordingIn(mode) : nil
   }
 
   var body: some View {
     VStack(spacing: 8) {
       TranscriptionIndicatorView(
         status: status,
-        meter: store.meter
+        meter: store.meter,
+        isSuper: store.superActive
       )
       ZStack {
         if let cyclerHighlight {
@@ -1059,6 +1562,9 @@ struct TranscriptionView: View {
     }
     .onChange(of: store.rewriteFallbackCount) { _, _ in
       show(.rewriteFellBack)
+    }
+    .onChange(of: store.notice) { _, request in
+      if let request { show(request.notice) }
     }
     .task(id: noticeID) {
       guard let hold = notice?.holdDuration else { return }

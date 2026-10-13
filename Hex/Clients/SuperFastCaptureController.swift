@@ -58,6 +58,8 @@ private struct SuperFastCaptureConstants {
   static let defaultPreRollDuration: TimeInterval = 0.45
   static let tapBufferSize: AVAudioFrameCount = 2_048
   static let fallbackStopGracePeriod: TimeInterval = 0.05
+  /// The start of each recording kept in memory for Super's early detection (`recordingHead`).
+  static let headDuration: TimeInterval = 4.0
   static let minimumStopGracePeriod: TimeInterval = 0.02
   static let maximumStopGracePeriod: TimeInterval = 0.08
   static let stopGraceSafetyMargin: TimeInterval = 0.008
@@ -101,6 +103,8 @@ final class SuperFastCaptureController {
     let requestedAt: Date
     let prependedDuration: TimeInterval
     var didLogFirstBuffer: Bool
+    /// The first `headDuration` of samples, pre-roll included.
+    var head: [Float] = []
   }
 
   private let logger = HexLog.recording
@@ -127,6 +131,10 @@ final class SuperFastCaptureController {
   private var recentCallbackIntervals: [TimeInterval] = []
   private var recentBufferDurations: [TimeInterval] = []
   private let onEngineConfigurationChange: @Sendable (Int) -> Void
+  /// Record through Apple's voice processing (`VoiceIsolation`). Takes effect the next time the engine is armed.
+  var voiceIsolation = false
+  /// Whether the running engine actually has voice processing on.
+  private(set) var isVoiceIsolated = false
 
   init(
     meterContinuation: AsyncStream<Meter>.Continuation,
@@ -201,6 +209,8 @@ final class SuperFastCaptureController {
   private func armEngine(reason: String) throws {
     let engine = AVAudioEngine()
     let inputNode = engine.inputNode
+    let isolated = voiceIsolation && VoiceIsolation.enable(on: engine)
+    // With voice processing the processed voice is channel 0; the channel map below keeps only it.
     let inputFormat = inputNode.inputFormat(forBus: 0)
     guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
       throw NSError(
@@ -230,6 +240,7 @@ final class SuperFastCaptureController {
       try engine.start()
     } catch {
       inputNode.removeTap(onBus: 0)
+      RetiredAudioEngines.retire(engine)
       processingQueue.sync {
         captureGeneration += 1
         self.converter = nil
@@ -237,6 +248,7 @@ final class SuperFastCaptureController {
       throw error
     }
     self.engine = engine
+    isVoiceIsolated = isolated
     configurationChangeObserver = NotificationCenter.default.addObserver(
       forName: .AVAudioEngineConfigurationChange,
       object: engine,
@@ -280,8 +292,12 @@ final class SuperFastCaptureController {
         recentBufferDurations.removeAll(keepingCapacity: false)
       }
     }
-    engine?.stop()
+    if let engine {
+      engine.stop()
+      RetiredAudioEngines.retire(engine)
+    }
     engine = nil
+    isVoiceIsolated = false
   }
 
   private func handleConfigurationChange(generation: Int) {
@@ -338,7 +354,8 @@ final class SuperFastCaptureController {
           file: file,
           requestedAt: requestedAt,
           prependedDuration: prependedDuration,
-          didLogFirstBuffer: false
+          didLogFirstBuffer: false,
+          head: preRollSamples
         )
       } catch {
         startError = error
@@ -348,6 +365,11 @@ final class SuperFastCaptureController {
     if let startError {
       throw startError
     }
+  }
+
+  /// The first seconds of the recording in progress (16 kHz mono); empty when nothing is recording.
+  func recordingHead() -> [Float] {
+    processingQueue.sync { activeRecording?.head ?? [] }
   }
 
   func finishRecording(clearBuffer: Bool = true) -> FinishRecordingResult {
@@ -410,6 +432,12 @@ final class SuperFastCaptureController {
         "Capture engine first buffer latency=\(String(format: "%.3f", timeToFirstBuffer))s prepended=\(String(format: "%.3f", recording.prependedDuration))s frames=\(sampleCount)"
       )
       recording.didLogFirstBuffer = true
+      activeRecording = recording
+    }
+
+    let headCapacity = Int(SuperFastCaptureConstants.headDuration * SuperFastCaptureConstants.sampleRate)
+    if recording.head.count < headCapacity {
+      recording.head += UnsafeBufferPointer(start: samples, count: min(sampleCount, headCapacity - recording.head.count))
       activeRecording = recording
     }
 

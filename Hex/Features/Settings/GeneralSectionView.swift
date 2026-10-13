@@ -10,6 +10,20 @@ struct GeneralSectionView: View {
 	var body: some View {
 		Section {
 			Label {
+				Toggle(
+					"Private Mode",
+					isOn: Binding(
+						get: { store.hexSettings.privateMode },
+						set: { store.send(.setPrivateMode($0)) }
+					)
+				)
+				Text("Nothing leaves this Mac: only the on-device model rewrites (other AIs are skipped and the text is pasted as heard), and there are no downloads, update checks or connection checks. Also in the menu bar menu.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "lock.fill")
+			}
+
+			Label {
 				Toggle("Open on Login",
 				       isOn: Binding(
 				       	get: { store.hexSettings.openOnLogin },
@@ -42,6 +56,34 @@ struct GeneralSectionView: View {
 				Text("Use clipboard to insert text. Fast but may not restore all clipboard content.\nTurn off to use simulated keypresses. Slower, but doesn't need to restore clipboard")
 			} icon: {
 				Image(systemName: "doc.on.doc.fill")
+			}
+
+			Label {
+				Toggle(
+					"Match surrounding text",
+					isOn: Binding(
+						get: { store.hexSettings.matchSurroundingText },
+						set: { store.send(.setMatchSurroundingText($0)) }
+					)
+				)
+				Text("Dictating into the middle of a sentence starts in lowercase and leaves off the final period, and spaces are added where words meet. Skipped in terminals.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "text.cursor")
+			}
+
+			Label {
+				Toggle(
+					"Let links start recording",
+					isOn: Binding(
+						get: { store.hexSettings.urlActionsEnabled },
+						set: { store.send(.setURLActionsEnabled($0)) }
+					)
+				)
+				Text("For Shortcuts, Raycast or a Stream Deck: \(URLAction.scheme)://start, toggle and notes/start turn the microphone on. Off, only stop, cancel and mode/clean (raw, prompt, notes) work, since any web page can open such a link.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "link")
 			}
 
 			Label {
@@ -106,5 +148,13 @@ struct GeneralSectionView: View {
 			Text("General")
 		}
 		.enableInjection()
+	}
+}
+
+extension URLAction {
+	/// This build's scheme from Info.plist: `legacyscribe` (Release) or `legacyscribe-debug` (Debug).
+	static var scheme: String {
+		let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
+		return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "legacyscribe"
 	}
 }

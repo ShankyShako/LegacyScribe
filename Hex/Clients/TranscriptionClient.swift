@@ -39,6 +39,10 @@ struct TranscriptionClient {
   /// Lists all model variants found in `argmaxinc/whisperkit-coreml`.
   var getAvailableModels: @Sendable () async throws -> [String]
 
+  /// `words` (a transcript of the recording at `audio`, from any engine) placed in the recording, using a
+  /// downloaded Parakeet model's timings. Throws when no Parakeet model is downloaded.
+  var timedWords: @Sendable (_ audio: URL, _ words: [String], _ selectedModel: String) async throws -> [SpokenWord]
+
   /// Loads a downloaded model ahead of use: the talk key went down, so it loads while the user speaks.
   var prewarm: @Sendable (String) async -> Void = { _ in }
 }
@@ -56,8 +60,15 @@ extension TranscriptionClient: DependencyKey {
       isModelDownloaded: { await live.isModelDownloaded($0) },
       getRecommendedModels: { await live.getRecommendedModels() },
       getAvailableModels: { try await live.getAvailableModels() },
+      timedWords: { try await live.timedWords(audio: $0, words: $1, selectedModel: $2) },
       prewarm: { await live.prewarm($0) }
     )
+  }
+  /// Warming is fire-and-forget, so tests don't have to stub it; every other endpoint is unimplemented.
+  static var testValue: Self {
+    var client = Self()
+    client.prewarm = { _ in }
+    return client
   }
 }
 
@@ -81,6 +92,12 @@ actor TranscriptionClientLive {
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
   private var cohere = CohereClient()
+  /// Every engine but WhisperKit, which takes the names none of these handles.
+  private lazy var engines: [any SpeechEngine] = [CohereEngine(client: cohere), ParakeetEngine(client: parakeet), AppleSpeechEngine()]
+
+  private func engine(for model: String) -> (any SpeechEngine)? {
+    engines.first { $0.handles(model) }
+  }
 
   /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
   private lazy var modelsBaseFolder: URL = {
@@ -96,14 +113,8 @@ actor TranscriptionClientLive {
   /// Ensures the given `variant` model is downloaded and loaded, reporting
   /// overall progress (0%–50% for downloading, 50%–100% for loading).
   func downloadAndLoadModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
-    if isCohere(variant) {
-      try await cohere.ensureLoaded(modelName: variant, progress: progressCallback)
-      currentModelName = variant
-      return
-    }
-    // If Parakeet, use Parakeet client path
-    if isParakeet(variant) {
-      try await parakeet.ensureLoaded(modelName: variant, progress: progressCallback)
+    if let engine = engine(for: variant) {
+      try await engine.prepare(variant, progress: progressCallback)
       currentModelName = variant
       return
     }
@@ -153,13 +164,8 @@ actor TranscriptionClientLive {
 
   /// Deletes a model from disk if it exists
   func deleteModel(variant: String) async throws {
-    if isCohere(variant) {
-      try await cohere.deleteCaches(modelName: variant)
-      if currentModelName == variant { currentModelName = nil }
-      return
-    }
-    if isParakeet(variant) {
-      try await parakeet.deleteCaches(modelName: variant)
+    if let engine = engine(for: variant) {
+      try await engine.delete(variant)
       if currentModelName == variant { unloadCurrentModel() }
       return
     }
@@ -185,13 +191,8 @@ actor TranscriptionClientLive {
   /// Returns `true` if the model is already downloaded to the local folder.
   /// Performs a thorough check to ensure the model files are actually present and usable.
   func isModelDownloaded(_ modelName: String) async -> Bool {
-    if isCohere(modelName) {
-      return await cohere.isModelAvailable(modelName)
-    }
-    if isParakeet(modelName) {
-      let available = await parakeet.isModelAvailable(modelName)
-      parakeetLogger.debug("Parakeet available? \(available)")
-      return available
+    if let engine = engine(for: modelName) {
+      return await engine.isDownloaded(modelName)
     }
     let modelFolderPath = modelPath(for: modelName).path
     let fileManager = FileManager.default
@@ -239,7 +240,32 @@ actor TranscriptionClientLive {
     for model in CohereModel.allCases.reversed() where !names.contains(model.identifier) {
       names.insert(model.identifier, at: 0)
     }
+    if !names.contains(AppleSpeech.identifier) {
+      names.append(AppleSpeech.identifier)
+    }
     return names
+  }
+
+  // MARK: - Word timings
+
+  /// Parakeet TDT's timings moved onto `words` (`WordMatcher`). Uses the Parakeet model already loaded,
+  /// else the selected one, else any downloaded one (English first), so history playback can highlight
+  /// words whichever engine transcribed them; Cohere has no timestamps.
+  func timedWords(audio: URL, words: [String], selectedModel: String) async throws -> [SpokenWord] {
+    var candidates: [String] = []
+    if let current = currentModelName, isParakeet(current) { candidates.append(current) }
+    if isParakeet(selectedModel) { candidates.append(selectedModel) }
+    candidates += [ParakeetModel.englishV2.identifier, ParakeetModel.multilingualV3.identifier]
+    for model in candidates where await parakeet.isModelAvailable(model) {
+      try await parakeet.ensureLoaded(modelName: model) { _ in }
+      let clip = try ParakeetClipPreparer.ensureMinimumDuration(url: audio, logger: parakeetLogger)
+      defer { clip.cleanup() }
+      let heard = try await parakeet.timedWords(clip.url)
+      return WordMatcher.transfer(heard, onto: words, startShift: WordMatcher.tdtStartShift)
+    }
+    throw NSError(domain: "TranscriptionClient", code: -5, userInfo: [
+      NSLocalizedDescriptionKey: "Word timings need a Parakeet model: download one in Settings > Models",
+    ])
   }
 
   // MARK: - Memory
@@ -250,7 +276,7 @@ actor TranscriptionClientLive {
   // sits mostly outside the app, and a Core ML reload can take seconds.
 
   func prewarm(_ model: String) async {
-    guard isCohere(model), await isModelDownloaded(model) else { return }
+    guard let engine = engine(for: model), engine.loadsPerDictation, await engine.isDownloaded(model) else { return }
     do {
       try await downloadAndLoadModel(variant: model) { _ in }
     } catch {
@@ -259,7 +285,9 @@ actor TranscriptionClientLive {
   }
 
   func releaseMemory() async {
-    await cohere.unload()
+    for engine in engines where engine.loadsPerDictation {
+      await engine.releaseMemory()
+    }
   }
 
   /// Transcribes the audio file at `url` using a `model` name.
@@ -288,26 +316,10 @@ actor TranscriptionClientLive {
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
     let startAll = Date()
-    if isCohere(model) {
-      try await downloadAndLoadModel(variant: model, progressCallback: progressCallback)
-      let startTx = Date()
-      let text = try await cohere.transcribe(url, modelName: model)
-      transcriptionLogger.info("Cohere transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
-      return text
-    }
-    if isParakeet(model) {
-      transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
-      let startLoad = Date()
-      try await downloadAndLoadModel(variant: model) { p in
-        progressCallback(p)
-      }
-      transcriptionLogger.info("Parakeet ensureLoaded took \(String(format: "%.2f", Date().timeIntervalSince(startLoad)))s")
-      let preparedClip = try ParakeetClipPreparer.ensureMinimumDuration(url: url, logger: parakeetLogger)
-      defer { preparedClip.cleanup() }
-      let startTx = Date()
-      let text = try await parakeet.transcribe(preparedClip.url)
-      transcriptionLogger.info("Parakeet transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
-      transcriptionLogger.info("Parakeet request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
+    if let engine = engine(for: model) {
+      transcriptionLogger.notice("Transcribing with \(model, privacy: .public) file=\(url.lastPathComponent)")
+      let text = try await engine.transcribe(url, model: model)
+      transcriptionLogger.info("\(model, privacy: .public) took \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
       return text
     }
     let model = await resolveVariant(model)
@@ -362,10 +374,6 @@ actor TranscriptionClientLive {
     }
 
     return ModelPatternMatcher.resolvePattern(variant, from: models) ?? variant
-  }
-
-  private func isCohere(_ name: String) -> Bool {
-    CohereModel(rawValue: name) != nil
   }
 
   private func isParakeet(_ name: String) -> Bool {

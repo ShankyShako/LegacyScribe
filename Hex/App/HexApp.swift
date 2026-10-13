@@ -1,4 +1,5 @@
 import ComposableArchitecture
+import HexCore
 import Inject
 import AppKit
 import SwiftUI
@@ -10,16 +11,28 @@ struct HexApp: App {
 	}
 
 	@NSApplicationDelegateAdaptor(HexAppDelegate.self) var appDelegate
+
+	init() {
+		#if DEBUG
+		if NotesHarness.isRequested { NotesHarness.runAndExit() }
+		#endif
+		// Before anything builds a URLSession, so Private mode reaches every one of them.
+		NetworkPolicy.install()
+		@Shared(.hexSettings) var hexSettings: HexSettings
+		NetworkPolicy.setPrivate(hexSettings.privateMode)
+	}
   
     var body: some Scene {
         MenuBarExtra {
             MenuBarCopyLastTranscriptButton()
             MenuBarLastLatencyView()
             MenuBarRewriteModePicker()
+            MenuBarPrivateModeToggle()
 
             Button("Settings…") {
                 appDelegate.presentSettingsView()
             }.keyboardShortcut(",")
+            MenuBarUpdateButton()
 
 			Divider()
 			
@@ -31,6 +44,8 @@ struct HexApp: App {
 		}
 		.commands {
 			CommandGroup(after: .appInfo) {
+				MenuBarUpdateButton()
+
 				Button("Settings…") {
 					appDelegate.presentSettingsView()
 				}.keyboardShortcut(",")

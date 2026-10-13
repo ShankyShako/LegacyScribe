@@ -75,8 +75,26 @@ struct MicrophoneSelectionSectionView: View {
 				Text("Selected device not connected. System default will be used.")
 					.settingsCaption()
 			}
+
+			Label {
+				Toggle("Voice isolation", isOn: Binding(
+					get: { store.hexSettings.voiceIsolationEnabled },
+					set: { store.send(.setVoiceIsolationEnabled($0)) }
+				))
+				Text("For noisy places: keeps your voice and turns down people talking around you, echo and noise. Applies to dictation; Notes has its own switch.")
+					.settingsCaption()
+				if store.hexSettings.voiceIsolationEnabled {
+					HStack {
+						Text("For the strongest effect, set Mic Mode to Voice Isolation.").settingsCaption()
+						Spacer()
+						Button("Open Mic Mode") { store.send(.showMicrophoneModes) }
+					}
+				}
+			} icon: {
+				Image(systemName: "person.wave.2")
+			}
 		} header: {
-			Text("Microphone Selection")
+			Text("Microphone")
 		} footer: {
 			Text("Override the system default microphone with a specific input device. This setting will persist across sessions.")
 				.font(.footnote)

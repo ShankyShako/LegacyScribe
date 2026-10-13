@@ -293,6 +293,23 @@ Now recording is locked on:
 
 ---
 
+## Notes Mode
+
+When the rewrite mode is Notes and no dictation is under way (the processor is idle), or while a notes session records, key events go to `NotesTapDetector` instead of `HotKeyProcessor`.
+
+- **Clean tap** (hotkey pressed, then released, nothing else pressed in between) → start a session, or stop the running one. It fires on release, so holding the talk key to type a character never starts a session.
+- **Another key or an extra modifier while the hotkey is held** → not a tap (Right ⌥ + ⌃ taps still step modes).
+- **Esc** (no modifiers) → stop the running session and keep it.
+- **A tap within 0.6 s of the start** → ignored, so a habitual double-tap doesn't end the session it just began.
+- **Interception**: a key hotkey's own key is blocked while held, as for dictation; modifier-only hotkeys pass through.
+- **Mode switched to Notes mid-dictation** → that dictation stays with `HotKeyProcessor` and pastes as recognized.
+
+The processor can't be reused here: after a double-tap lock it reports the stopping *press* as `.stopRecording`, which looks the same as a release.
+
+Tests: `NotesTapDetectorTests` in `HexCore/Tests/HexCoreTests/NotesTests.swift`.
+
+---
+
 ## Output Types
 
 - **`.discard`** (silent)
@@ -572,6 +589,7 @@ Result: Recording cancelled ✅
 - **Recording Decision**: `HexCore/Sources/HexCore/Logic/RecordingDecision.swift`
 - **Feature Integration**: `Hex/Features/Transcription/TranscriptionFeature.swift`
 - **Tests**: `HexCore/Tests/HexCoreTests/HotKeyProcessorTests.swift`
+- **Notes mode taps**: `HexCore/Sources/HexCore/Logic/NotesTapDetector.swift`
 
 ---
 

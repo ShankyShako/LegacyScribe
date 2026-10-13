@@ -13,9 +13,15 @@ struct PracticeView: View {
 	var body: some View {
 		Form {
 			readAloudSection
+			if !store.practiceLog.recordings.isEmpty {
+				hearingSection
+			}
 			sentTextSection
 			vocabularySection
-			researchSection
+			// Research needs a web-search model, which only a router such as OmniRoute offers.
+			if store.hexSettings.rewritePrimary.provider == .custom {
+				researchSection
+			}
 		}
 		.formStyle(.grouped)
 		.onAppear {
@@ -140,6 +146,84 @@ struct PracticeView: View {
 			parts.append(String(format: "engine heard %.0f%% of words right", max(0, 1 - rate) * 100))
 		}
 		return parts.joined(separator: " · ")
+	}
+
+	// MARK: - Hearing check
+
+	private var hearingSection: some View {
+		let script = PracticeScript.bundled
+		let terms = Dictionary(script.lines.map { ($0.id, $0.terms) }, uniquingKeysWith: { first, _ in first })
+		let summary = store.practiceLog.gradeSummary { terms[$0] ?? [] }
+		let checked = store.practiceLog.recordings.values.filter { $0.secondOpinion != nil }.count
+		return Section {
+			Label {
+				Text("Checks how much of each line the speech engine heard right, aiming for 95% or better. A second engine of a different kind listens too: when both hear the same other word, that's most likely how you said it, so it doesn't count against the engine. New words such as product names don't count either; add them to your vocabulary.")
+					.settingsCaption()
+				if !summary.lines.isEmpty {
+					Text(String(
+						format: "Heard %.0f%% of %d words · %d of %d lines at 95%% or better",
+						summary.heard * 100, summary.words, summary.passing, summary.lines.count
+					))
+					.font(.callout)
+					if checked < summary.lines.count {
+						Text("\(checked) of \(summary.lines.count) lines have a second opinion so far.").settingsCaption()
+					}
+				}
+				HStack {
+					if let progress = store.recordingCheck {
+						ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+							.frame(maxWidth: 200)
+						Text("\(progress.done) of \(progress.total)").settingsCaption().monospacedDigit()
+						Button("Stop") { store.send(.cancelRecordingCheck) }
+					} else {
+						Button("Check my recordings") { store.send(.checkRecordings) }
+					}
+					Spacer()
+				}
+				if let note = store.recordingCheckNote {
+					Text(note).settingsCaption()
+				}
+			} icon: {
+				Image(systemName: "ear")
+			}
+
+			if !summary.saidDifferently.isEmpty {
+				Label {
+					Text("Words you may have read differently").font(.callout)
+					Text(Self.pairs(summary.saidDifferently)).settingsCaption().textSelection(.enabled)
+					Text("Both engines heard these. Practice them, or redo those lines so the recordings match their text.")
+						.settingsCaption()
+				} icon: {
+					Image(systemName: "person.wave.2")
+				}
+			}
+
+			if !summary.newWords.isEmpty {
+				Label {
+					Text("New words the engine spelled its own way").font(.callout)
+					Text(Self.pairs(summary.newWords)).settingsCaption().textSelection(.enabled)
+				} icon: {
+					Image(systemName: "character.book.closed")
+				}
+			}
+
+			ForEach(summary.belowMark.prefix(10)) { line in
+				Label {
+					Text(line.text).font(.callout)
+					Text(String(format: "Heard %.0f%%: ", line.grade.heard * 100) + Self.pairs(line.grade.differences.filter { $0.kind == .misheard }))
+						.settingsCaption()
+				} icon: {
+					Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+				}
+			}
+		} header: {
+			Text("How well the engine hears you")
+		}
+	}
+
+	/// "equatable → equitable, ∅ → feel"
+	static func pairs(_ differences: [PracticeGrade.Difference]) -> String {
+		differences.map { "\($0.expected ?? "(nothing)") → \($0.heard ?? "(nothing)")" }.joined(separator: ", ")
 	}
 
 	// MARK: - Sent text

@@ -92,6 +92,9 @@ public struct PracticeRecording: Codable, Equatable, Sendable {
 	public var trainedAt: Date?
 	/// When the audio was deleted to free space. The line stays recorded, so it isn't asked again.
 	public var audioClearedAt: Date?
+	/// What an engine from another family heard (`PracticeGrade`), and which engine.
+	public var secondOpinion: String?
+	public var secondOpinionEngine: String?
 
 	public init(
 		lineID: String,

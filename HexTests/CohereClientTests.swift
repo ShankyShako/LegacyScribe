@@ -17,7 +17,7 @@ final class CohereClientTests: XCTestCase {
 
     try await client.ensureLoaded(modelName: model) { _ in }
     let start = ContinuousClock.now
-    let text = try await client.transcribe(clip)
+    let text = try await client.transcribe(clip, modelName: model)
     let elapsed = ContinuousClock.now - start
 
     XCTAssertTrue(text.localizedCaseInsensitiveContains("benchmark"), text)

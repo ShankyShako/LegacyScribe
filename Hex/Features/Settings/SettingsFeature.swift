@@ -59,10 +59,31 @@ struct SettingsFeature {
     var modelDownload = ModelDownloadFeature.State()
     var shouldFlashModelSection = false
 
-    // LLM rewrite endpoints; API keys mirror the Keychain.
-    var rewriteAPIKeys: [RewriteEndpointRole: String] = [:]
+    // LLM rewrite endpoints; API keys mirror the Keychain, keyed by account (one per hosted provider).
+    var rewriteAPIKeys: [String: String] = [:]
     var rewriteModelOptions: [RewriteEndpointRole: [String]] = [:]
     var rewriteStatus: [RewriteEndpointRole: RewriteEndpointStatus] = [:]
+
+    // On-device models: which are on disk, and download progress (0…1) for those downloading.
+    var localModelsDownloaded: Set<LocalLLMModel> = []
+    var localModelProgress: [LocalLLMModel: Double] = [:]
+    var localModelError: String?
+
+    func apiKey(for role: RewriteEndpointRole) -> String {
+      rewriteAPIKeys[hexSettings.endpoint(for: role).keychainAccount(role)] ?? ""
+    }
+
+    /// The slot can rewrite right now: its model is downloaded, or its key is in.
+    func isRewriteReady(_ role: RewriteEndpointRole) -> Bool {
+      let endpoint = hexSettings.endpoint(for: role)
+      switch endpoint.provider {
+      case .onDevice:
+        return localModelsDownloaded.contains { $0.repository == endpoint.model }
+      default:
+        let hasKey = !apiKey(for: role).trimmingCharacters(in: .whitespaces).isEmpty
+        return endpoint.isConfigured && (hasKey || !endpoint.provider.needsAPIKey)
+      }
+    }
 
   }
 
@@ -105,6 +126,8 @@ struct SettingsFeature {
     // History Management
     case toggleSaveTranscriptionHistory(Bool)
     case setMaxHistoryEntries(Int?)
+    case setAudioRetentionDays(Int)
+    case setPrivateMode(Bool)
 
     // Modifier configuration
     case setModifierSide(Modifier.Kind, Modifier.Side)
@@ -129,15 +152,37 @@ struct SettingsFeature {
     case setCodeTalkEnabled(Bool)
     case setModeCyclerEnabled(Bool)
     case setMergeIntoFieldEnabled(Bool)
+    case setContextTermsEnabled(Bool)
     case setCaptureSentEdits(Bool)
+    case setMatchSurroundingText(Bool)
+    case setSuperEnabled(Bool)
+    case setSuperEarlyDetection(Bool)
+    case setURLActionsEnabled(Bool)
     case setVocabulary([String])
     /// Nil or the default text restores the built-in instructions.
     case setRewriteInstructions(RewriteMode, String?)
     case setRewriteAPIKey(RewriteEndpointRole, String)
+    /// Switches the slot to the provider's defaults, keeping an address typed for the same provider.
+    case setRewriteProvider(RewriteEndpointRole, RewriteProvider)
     case loadRewriteModels(RewriteEndpointRole)
     case rewriteModelsLoaded(RewriteEndpointRole, [String])
+    /// Lists the provider's models, picks a fast one if the current model isn't offered, then runs a test rewrite.
+    case connectRewriteEndpoint(RewriteEndpointRole)
     case testRewriteEndpoint(RewriteEndpointRole)
     case rewriteStatusChanged(RewriteEndpointRole, RewriteEndpointStatus)
+
+    // On-device models
+    case refreshLocalModels
+    case downloadLocalModel(LocalLLMModel)
+    case localModelProgress(LocalLLMModel, Double)
+    case localModelDownloadFinished(LocalLLMModel, error: String?)
+    case cancelLocalModelDownload(LocalLLMModel)
+    case deleteLocalModel(LocalLLMModel)
+
+    // Voice isolation
+    case setVoiceIsolationEnabled(Bool)
+    case setVoiceIsolationInNotes(Bool)
+    case showMicrophoneModes
   }
 
   @Dependency(\.keyEventMonitor) var keyEventMonitor
@@ -147,6 +192,7 @@ struct SettingsFeature {
   @Dependency(\.transcriptPersistence) var transcriptPersistence
   @Dependency(\.rewrite) var rewrite
   @Dependency(\.keychain) var keychain
+  @Dependency(\.localLLM) var localLLM
 
   private func deleteAudioEffect(for transcripts: [Transcript]) -> Effect<Action> {
     .run { [transcriptPersistence] _ in
@@ -259,8 +305,10 @@ struct SettingsFeature {
 
       case .task:
         for role in RewriteEndpointRole.allCases {
-          state.rewriteAPIKeys[role] = keychain.read(role.keychainAccount) ?? ""
+          let account = state.hexSettings.endpoint(for: role).keychainAccount(role)
+          state.rewriteAPIKeys[account] = keychain.read(account) ?? ""
         }
+        state.localModelsDownloaded = Set(LocalLLMModel.allCases.filter(localLLM.isDownloaded))
         if let url = Bundle.main.url(forResource: "languages", withExtension: "json"),
           let data = try? Data(contentsOf: url),
           let languages = try? JSONDecoder().decode([Language].self, from: data)
@@ -549,8 +597,28 @@ struct SettingsFeature {
         state.$hexSettings.withLock { $0.mergeIntoFieldEnabled = enabled }
         return .none
 
+      case let .setContextTermsEnabled(enabled):
+        state.$hexSettings.withLock { $0.contextTermsEnabled = enabled }
+        return .none
+
       case let .setCaptureSentEdits(enabled):
         state.$hexSettings.withLock { $0.captureSentEdits = enabled }
+        return .none
+
+      case let .setMatchSurroundingText(enabled):
+        state.$hexSettings.withLock { $0.matchSurroundingText = enabled }
+        return .none
+
+      case let .setSuperEnabled(enabled):
+        state.$hexSettings.withLock { $0.superEnabled = enabled }
+        return .none
+
+      case let .setSuperEarlyDetection(enabled):
+        state.$hexSettings.withLock { $0.superEarlyDetection = enabled }
+        return .none
+
+      case let .setURLActionsEnabled(enabled):
+        state.$hexSettings.withLock { $0.urlActionsEnabled = enabled }
         return .none
 
       case let .setModeCyclerEnabled(enabled):
@@ -570,22 +638,47 @@ struct SettingsFeature {
         return .none
 
       case let .setRewriteAPIKey(role, key):
-        state.rewriteAPIKeys[role] = key
+        let account = state.hexSettings.endpoint(for: role).keychainAccount(role)
+        state.rewriteAPIKeys[account] = key
+        state.rewriteStatus[role] = nil
         return .run { [keychain] _ in
           do {
-            try keychain.write(role.keychainAccount, key.trimmingCharacters(in: .whitespacesAndNewlines))
+            try keychain.write(account, key.trimmingCharacters(in: .whitespacesAndNewlines))
           } catch {
-            HexLog.rewrite.error("Saving the \(role.rawValue, privacy: .public) API key failed: \(error.localizedDescription, privacy: .public)")
+            HexLog.rewrite.error("Saving the \(account, privacy: .public) API key failed: \(error.localizedDescription, privacy: .public)")
           }
         }
 
+      case let .setRewriteProvider(role, provider):
+        let current = state.hexSettings.endpoint(for: role)
+        guard current.provider != provider else { return .none }
+        var endpoint = RewriteEndpoint.preset(provider)
+        // Prefer a model that's already on disk over the recommended one.
+        if provider == .onDevice, !state.localModelsDownloaded.contains(.recommended),
+           let downloaded = LocalLLMModel.allCases.first(where: state.localModelsDownloaded.contains) {
+          endpoint.model = downloaded.repository
+        }
+        state.$hexSettings.withLock {
+          switch role {
+          case .primary: $0.rewritePrimary = endpoint
+          case .fallback: $0.rewriteFallback = endpoint
+          }
+        }
+        state.rewriteModelOptions[role] = nil
+        state.rewriteStatus[role] = nil
+        let account = endpoint.keychainAccount(role)
+        if state.rewriteAPIKeys[account] == nil {
+          state.rewriteAPIKeys[account] = keychain.read(account) ?? ""
+        }
+        return .none
+
       case let .loadRewriteModels(role):
         let endpoint = state.hexSettings.endpoint(for: role)
-        let apiKey = state.rewriteAPIKeys[role]
+        let apiKey = state.apiKey(for: role)
         state.rewriteStatus[role] = .working("Loading models…")
         return .run { [rewrite] send in
           do {
-            let models = try await rewrite.listModels(endpoint.baseURL, apiKey)
+            let models = try await rewrite.listModels(endpoint, apiKey)
             await send(.rewriteModelsLoaded(role, models))
             await send(.rewriteStatusChanged(role, .ok("\(models.count) models")))
           } catch {
@@ -597,10 +690,31 @@ struct SettingsFeature {
         state.rewriteModelOptions[role] = models
         return .none
 
+      case let .connectRewriteEndpoint(role):
+        let endpoint = state.hexSettings.endpoint(for: role)
+        let apiKey = state.apiKey(for: role)
+        if endpoint.provider.needsAPIKey, apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+          state.rewriteStatus[role] = .failed("Paste your API key first.")
+          return .none
+        }
+        state.rewriteStatus[role] = .working("Connecting…")
+        return .run { [rewrite] send in
+          // The listing is best effort: some servers don't offer it, and the test below is what counts.
+          if let models = try? await rewrite.listModels(endpoint, apiKey), !models.isEmpty {
+            await send(.rewriteModelsLoaded(role, models))
+            if !models.contains(endpoint.model), let better = endpoint.provider.preferredModel(from: models) {
+              var updated = endpoint
+              updated.model = better
+              await send(.setRewriteEndpoint(role, updated))
+            }
+          }
+          await send(.testRewriteEndpoint(role))
+        }
+
       case let .testRewriteEndpoint(role):
         let endpoint = state.hexSettings.endpoint(for: role)
-        let apiKey = state.rewriteAPIKeys[role]
-        let mode = state.hexSettings.rewriteMode == .raw ? RewriteMode.clean : state.hexSettings.rewriteMode
+        let apiKey = state.apiKey(for: role)
+        let mode = state.hexSettings.rewriteMode.rewrites ? state.hexSettings.rewriteMode : RewriteMode.clean
         let vocabulary = state.hexSettings.vocabulary
         state.rewriteStatus[role] = .working("Testing \(endpoint.model)…")
         return .run { [rewrite] send in
@@ -618,6 +732,85 @@ struct SettingsFeature {
 
       case let .rewriteStatusChanged(role, status):
         state.rewriteStatus[role] = status
+        return .none
+
+      case .refreshLocalModels:
+        state.localModelsDownloaded = Set(LocalLLMModel.allCases.filter(localLLM.isDownloaded))
+        return .none
+
+      case let .downloadLocalModel(model):
+        guard state.localModelProgress[model] == nil else { return .none }
+        state.localModelProgress[model] = 0
+        state.localModelError = nil
+        return .run { [localLLM] send in
+          do {
+            try await localLLM.download(model) { fraction in
+              Task { await send(.localModelProgress(model, fraction)) }
+            }
+            await send(.localModelDownloadFinished(model, error: nil))
+          } catch is CancellationError {
+            await send(.localModelDownloadFinished(model, error: nil))
+          } catch {
+            await send(.localModelDownloadFinished(model, error: error.localizedDescription))
+          }
+        }
+        .cancellable(id: LocalModelDownloadID(model: model), cancelInFlight: true)
+
+      case let .localModelProgress(model, fraction):
+        // A late progress update must not bring back a finished download's bar.
+        if state.localModelProgress[model] != nil {
+          state.localModelProgress[model] = fraction
+        }
+        return .none
+
+      case let .localModelDownloadFinished(model, error):
+        state.localModelProgress[model] = nil
+        state.localModelError = error.map { "Downloading \(model.displayName) failed: \($0)" }
+        state.localModelsDownloaded = Set(LocalLLMModel.allCases.filter(localLLM.isDownloaded))
+        // The first download becomes the model in use, so setup is one click.
+        if state.localModelsDownloaded.contains(model) {
+          for role in RewriteEndpointRole.allCases {
+            let endpoint = state.hexSettings.endpoint(for: role)
+            let hasUsableModel = state.localModelsDownloaded.contains { $0.repository == endpoint.model }
+            if endpoint.provider == .onDevice, !hasUsableModel {
+              var updated = endpoint
+              updated.model = model.repository
+              state.$hexSettings.withLock {
+                switch role {
+                case .primary: $0.rewritePrimary = updated
+                case .fallback: $0.rewriteFallback = updated
+                }
+              }
+            }
+          }
+        }
+        return .none
+
+      case let .cancelLocalModelDownload(model):
+        state.localModelProgress[model] = nil
+        return .cancel(id: LocalModelDownloadID(model: model))
+
+      case let .deleteLocalModel(model):
+        state.localModelsDownloaded.remove(model)
+        return .run { [localLLM] send in
+          do {
+            try await localLLM.delete(model)
+          } catch {
+            HexLog.rewrite.error("Deleting \(model.repository, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+          }
+          await send(.refreshLocalModels)
+        }
+
+      case let .setVoiceIsolationEnabled(enabled):
+        state.$hexSettings.withLock { $0.voiceIsolationEnabled = enabled }
+        return .run { _ in await recording.warmUpRecorder() }
+
+      case let .setVoiceIsolationInNotes(enabled):
+        state.$hexSettings.withLock { $0.voiceIsolationInNotes = enabled }
+        return .none
+
+      case .showMicrophoneModes:
+        AVCaptureDevice.showSystemUserInterface(.microphoneModes)
         return .none
 
       case let .setSoundEffectsEnabled(enabled):
@@ -687,6 +880,14 @@ struct SettingsFeature {
         state.$hexSettings.withLock { $0.maxHistoryEntries = maxHistoryEntries }
         return .none
 
+      case let .setPrivateMode(isOn):
+        state.$hexSettings.withLock { $0.privateMode = isOn }
+        return .none
+
+      case let .setAudioRetentionDays(days):
+        state.$hexSettings.withLock { $0.audioRetentionDays = days }
+        return .run { _ in AudioRetentionSweep.run() }
+
       case let .setModifierSide(kind, side):
         guard state.hexSettings.hotkey.key == nil else { return .none }
         state.$hexSettings.withLock {
@@ -709,6 +910,10 @@ enum RewriteEndpointStatus: Equatable {
   case working(String)
   case ok(String)
   case failed(String)
+}
+
+private struct LocalModelDownloadID: Hashable {
+  var model: LocalLLMModel
 }
 
 extension HexSettings {

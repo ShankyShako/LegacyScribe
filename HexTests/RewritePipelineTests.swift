@@ -9,9 +9,13 @@ import XCTest
 final class RewritePipelineTests: XCTestCase {
   struct Offline: Error, LocalizedError { var errorDescription: String? { "offline" } }
 
+  /// Fresh installs rewrite on-device with the backup off; these tests need two servers that need no key.
+  static let primary = RewriteEndpoint(provider: .custom, baseURL: "http://localhost:20128/v1", model: "groq/openai/gpt-oss-120b")
+  static let fallback = RewriteEndpoint(provider: .ollama, baseURL: "http://localhost:11434/v1", model: "qwen3:8b")
+
   func testFallbackRewriteIsPastedAndOriginalKept() async {
     let pasted = await runDictation("um so hi there") { endpoint, _, _ in
-      if endpoint.model == HexSettings.defaultRewritePrimary.model { throw Offline() }
+      if endpoint.model == Self.primary.model { throw Offline() }
       return "So, hi there."
     }
     XCTAssertEqual(pasted.text, "So, hi there.")
@@ -19,8 +23,8 @@ final class RewritePipelineTests: XCTestCase {
     XCTAssertEqual(entry?.text, "So, hi there.")
     XCTAssertEqual(entry?.rawText, "um so hi there")
     XCTAssertEqual(entry?.rewriteMode, .clean)
-    XCTAssertEqual(entry?.rewrittenBy, HexSettings.defaultRewriteFallback.model)
-    XCTAssertEqual(entry?.rewriteFailures, ["primary \(HexSettings.defaultRewritePrimary.model): offline"])
+    XCTAssertEqual(entry?.rewrittenBy, Self.fallback.model)
+    XCTAssertEqual(entry?.rewriteFailures, ["primary \(Self.primary.model): offline"])
   }
 
   func testTranscriptIsPastedWhenEveryEndpointFails() async {
@@ -40,6 +44,23 @@ final class RewritePipelineTests: XCTestCase {
     }
     XCTAssertEqual(pasted.text, "um so hi there")
     XCTAssertNil(pasted.history.first?.rewriteFailures)
+  }
+
+  func testPasteMatchesTheTextAroundTheCursorButHistoryDoesNot() async {
+    let pasted = await runDictation("The report is ready.", mode: .raw, field: "I think and we ship", cursor: 8) { _, _, _ in
+      XCTFail("rewrite called in raw mode")
+      return ""
+    }
+    XCTAssertEqual(pasted.text, "the report is ready ")
+    XCTAssertEqual(pasted.history.first?.text, "The report is ready.")
+  }
+
+  func testLeadingSlashCommandIsPastedAsIsMidSentence() async {
+    let pasted = await runDictation("Slash pick up.", mode: .prompt, slashCommands: ["pickup"], field: "see", cursor: 3) { _, _, _ in
+      XCTFail("rewrite called for a bare command")
+      return ""
+    }
+    XCTAssertEqual(pasted.text, "/pickup")
   }
 
   func testLeadingSlashCommandSkipsTheLLMWhenNothingFollows() async {
@@ -76,6 +97,15 @@ final class RewritePipelineTests: XCTestCase {
     XCTAssertEqual(pasted.text, "Slash handoff.")
   }
 
+  func testPrivateModeNeverCallsANetworkEndpoint() async {
+    let pasted = await runDictation("um so hi there", privateMode: true) { _, _, _ in
+      XCTFail("a network endpoint was called in Private mode")
+      return ""
+    }
+    XCTAssertEqual(pasted.text, "um so hi there")
+    XCTAssertNil(pasted.history.first?.rewriteFailures, "a skipped endpoint isn't a failure")
+  }
+
   private let dessertList = "## Desserts\n- Tiramisu\n- Lemon tart"
 
   func testPromptMergesIntoTheFieldAndReplacesIt() async {
@@ -110,6 +140,8 @@ final class RewritePipelineTests: XCTestCase {
     mode: RewriteMode = .clean,
     slashCommands: [String] = [],
     field: String? = nil,
+    cursor: Int? = nil,
+    privateMode: Bool = false,
     complete: @escaping @Sendable (RewriteEndpoint, String?, [ChatMessage]) async throws -> String
   ) async -> (text: String, history: [Transcript], commands: [KeyboardCommand]) {
     let audioURL = FileManager.default.temporaryDirectory
@@ -117,7 +149,13 @@ final class RewritePipelineTests: XCTestCase {
     let paste = PasteProbe()
     let history = Shared(value: TranscriptionHistory())
     var state = TranscriptionFeature.State(
-      hexSettings: Shared(value: .init(rewriteMode: mode)),
+      hexSettings: Shared(value: .init(
+        rewriteMode: mode,
+        rewritePrimary: Self.primary,
+        rewriteFallback: Self.fallback,
+        rewriteFallbackEnabled: true,
+        privateMode: privateMode
+      )),
       isRemappingScratchpadFocused: false,
       modelBootstrapState: Shared(value: .init(isModelReady: true)),
       transcriptionHistory: history
@@ -129,7 +167,7 @@ final class RewritePipelineTests: XCTestCase {
       $0.rewrite.complete = complete
       $0.keychain.read = { _ in nil }
       $0.codeTalk.slashCommands = { slashCommands }
-      $0.focusedText.read = { field.map { FocusedText(bundleID: "com.example.chat", value: $0) } }
+      $0.focusedText.read = { field.map { FocusedText(bundleID: "com.example.chat", value: $0, cursor: cursor) } }
       $0.pasteboard.sendKeyboardCommand = { command in await paste.record(command) }
       $0.transcriptPersistence.save = { text, audioURL, duration, bundleID, appName in
         Transcript(timestamp: Date(), text: text, audioPath: audioURL, duration: duration)

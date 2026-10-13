@@ -1,4 +1,3 @@
-import CryptoKit
 import FluidAudio
 import Foundation
 import HexCore
@@ -96,91 +95,24 @@ actor CohereClient {
 
   // MARK: - Download
 
-  /// Fetches each missing file from Hugging Face into a temp file, checks LFS files against
-  /// their SHA-256, then moves it into place, so a broken download never looks complete.
   private func download(_ variant: CohereModel, to directory: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let listing = try await Self.repositoryFiles(variant.repository)
-    let wanted = listing.filter { CohereModel.requiredFiles.contains($0.path) }
-    let totalBytes = max(1, wanted.reduce(0) { $0 + $1.size })
-    var doneBytes: Int64 = 0
-
-    for file in wanted {
-      let destination = directory.appendingPathComponent(file.path)
-      if FileManager.default.fileExists(atPath: destination.path) {
-        doneBytes += file.size
-        continue
-      }
-      let source = URL(string: "https://huggingface.co/\(variant.repository)/resolve/main/\(file.path)")!
-      logger.notice("Downloading \(file.path, privacy: .public) (\(file.size / 1_048_576) MB)")
-      let base = doneBytes
-      let (temporary, _) = try await URLSession.shared.download(from: source, delegate: DownloadProgress { written in
-        progress(Double(base + written) / Double(totalBytes))
-      })
-      // Move out of the system temp location right away; it may be cleaned up at any time.
-      let partial = destination.appendingPathExtension("partial")
-      try? FileManager.default.removeItem(at: partial)
-      try FileManager.default.moveItem(at: temporary, to: partial)
-      if let expected = file.sha256 {
-        let actual = try Self.sha256(of: partial)
-        guard actual == expected else {
-          try? FileManager.default.removeItem(at: partial)
-          throw CohereError.checksumMismatch(file.path)
-        }
-      }
-      try FileManager.default.moveItem(at: partial, to: destination)
-      doneBytes += file.size
-      progress(Double(doneBytes) / Double(totalBytes))
-    }
+    try await HuggingFaceDownloader.download(
+      variant.repository,
+      to: directory,
+      wanted: { CohereModel.requiredFiles.contains($0) },
+      progress: progress
+    )
   }
-
-  private struct RepoFile: Decodable {
-    struct LFS: Decodable { var oid: String }
-    var type: String
-    var path: String
-    var size: Int64
-    var lfs: LFS?
-    var sha256: String? { lfs?.oid }
-  }
-
-  private static func repositoryFiles(_ repository: String) async throws -> [RepoFile] {
-    let url = URL(string: "https://huggingface.co/api/models/\(repository)/tree/main")!
-    let (data, _) = try await URLSession.shared.data(from: url)
-    return try JSONDecoder().decode([RepoFile].self, from: data).filter { $0.type == "file" }
-  }
-
-  private static func sha256(of url: URL) throws -> String {
-    let handle = try FileHandle(forReadingFrom: url)
-    defer { try? handle.close() }
-    var hasher = SHA256()
-    while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty {
-      hasher.update(data: chunk)
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-  }
-}
-
-private final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-  let onBytes: @Sendable (Int64) -> Void
-  init(onBytes: @escaping @Sendable (Int64) -> Void) { self.onBytes = onBytes }
-
-  func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-    onBytes(totalBytesWritten)
-  }
-
-  func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }
 
 enum CohereError: Error, LocalizedError {
   case unknownModel(String)
   case notLoaded
-  case checksumMismatch(String)
 
   var errorDescription: String? {
     switch self {
     case let .unknownModel(name): "Unknown Cohere model: \(name)"
     case .notLoaded: "Cohere model used before it was loaded"
-    case let .checksumMismatch(file): "\(file) failed its checksum; download it again"
     }
   }
 }

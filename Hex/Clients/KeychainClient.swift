@@ -64,8 +64,3 @@ extension DependencyValues {
 		set { self[KeychainClient.self] = newValue }
 	}
 }
-
-extension RewriteEndpointRole {
-	/// Keychain account holding this endpoint's API key.
-	var keychainAccount: String { "apiKey.\(rawValue)" }
-}

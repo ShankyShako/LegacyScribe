@@ -19,8 +19,10 @@ struct AppFeature {
 
   enum ActiveTab: Equatable {
     case settings
+    case rewrite
     case remappings
     case practice
+    case notes
     case history
     case about
   }
@@ -31,6 +33,7 @@ struct AppFeature {
 		var settings: SettingsFeature.State = .init()
 		var history: HistoryFeature.State = .init()
 		var practice: PracticeFeature.State = .init()
+		var notes: NotesFeature.State = .init()
 		var activeTab: ActiveTab = .settings
 		@Shared(.hexSettings) var hexSettings: HexSettings
 		@Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
@@ -47,6 +50,7 @@ struct AppFeature {
     case settings(SettingsFeature.Action)
     case history(HistoryFeature.Action)
     case practice(PracticeFeature.Action)
+    case notes(NotesFeature.Action)
     case setActiveTab(ActiveTab)
     case task
     case pasteLastTranscript
@@ -62,6 +66,7 @@ struct AppFeature {
   @Dependency(\.pasteboard) var pasteboard
   @Dependency(\.transcription) var transcription
   @Dependency(\.permissions) var permissions
+  @Dependency(\.notes) var notes
 
   var body: some ReducerOf<Self> {
     BindingReducer()
@@ -82,6 +87,10 @@ struct AppFeature {
       PracticeFeature()
     }
 
+    Scope(state: \.notes, action: \.notes) {
+      NotesFeature()
+    }
+
     Reduce { state, action in
       switch action {
       case .binding:
@@ -91,12 +100,20 @@ struct AppFeature {
         return .merge(
           startPasteLastTranscriptMonitoring(),
           ensureSelectedModelReadiness(),
-          startPermissionMonitoring()
+          startPermissionMonitoring(),
+          // Notes sessions a quit or crash left unfinished carry on.
+          .run { [notes] _ in await notes.resumeUnfinished() },
+          .run { _ in
+            while !Task.isCancelled {
+              AudioRetentionSweep.run()
+              try await Task.sleep(for: AudioRetentionSweep.interval)
+            }
+          }
         )
         
       case .pasteLastTranscript:
         @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
-        guard let lastTranscript = transcriptionHistory.history.first?.text else {
+        guard let lastTranscript = transcriptionHistory.history.first(where: { $0.failure == nil })?.text else {
           return .none
         }
         return .run { _ in
@@ -155,6 +172,9 @@ struct AppFeature {
         return .none
 
       case .practice:
+        return .none
+
+      case .notes:
         return .none
 		case let .setActiveTab(tab):
 			state.activeTab = tab
@@ -290,6 +310,14 @@ struct AppView: View {
         .tag(AppFeature.ActiveTab.settings)
 
         Button {
+          store.send(.setActiveTab(.rewrite))
+        } label: {
+          Label("AI Rewrite", systemImage: "wand.and.stars")
+        }
+        .buttonStyle(.plain)
+        .tag(AppFeature.ActiveTab.rewrite)
+
+        Button {
           store.send(.setActiveTab(.remappings))
         } label: {
           Label("Transforms", systemImage: "text.badge.plus")
@@ -304,6 +332,14 @@ struct AppView: View {
         }
         .buttonStyle(.plain)
         .tag(AppFeature.ActiveTab.practice)
+
+        Button {
+          store.send(.setActiveTab(.notes))
+        } label: {
+          Label("Notes", systemImage: RewriteMode.notes.systemImage)
+        }
+        .buttonStyle(.plain)
+        .tag(AppFeature.ActiveTab.notes)
 
         Button {
           store.send(.setActiveTab(.history))
@@ -331,6 +367,9 @@ struct AppView: View {
           inputMonitoringPermission: store.inputMonitoringPermission
         )
         .navigationTitle("Settings")
+      case .rewrite:
+        RewriteSettingsView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("AI Rewrite")
       case .remappings:
         WordRemappingsView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Transforms")
@@ -340,6 +379,9 @@ struct AppView: View {
           transcription: store.scope(state: \.transcription, action: \.transcription)
         )
           .navigationTitle("Practice")
+      case .notes:
+        NotesView(store: store.scope(state: \.notes, action: \.notes))
+          .navigationTitle("Notes")
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")

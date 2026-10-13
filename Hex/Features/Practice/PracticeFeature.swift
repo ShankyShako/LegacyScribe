@@ -29,6 +29,10 @@ struct PracticeFeature {
 		var research = ""
 		var isResearching = false
 		var researchError: String?
+
+		/// "Check my recordings" in progress: lines done and to do.
+		var recordingCheck: RecordingCheckProgress?
+		var recordingCheckNote: String?
 	}
 
 	enum Action {
@@ -62,6 +66,13 @@ struct PracticeFeature {
 		case practiceFolderScanned([String: Int64]?)
 		case markTrained
 		case clearTrainedAudio
+
+		/// Transcribes each recording with a second engine family and grades it (`PracticeGrade`).
+		case checkRecordings
+		case recordingChecked(lineID: String, recognized: String?, secondOpinion: String?, engine: String?)
+		case recordingCheckProgress(done: Int, total: Int)
+		case recordingCheckFinished(note: String?)
+		case cancelRecordingCheck
 	}
 
 	enum CancelID {
@@ -69,6 +80,7 @@ struct PracticeFeature {
 		case research
 		case practiceLine
 		case scan
+		case recordingCheck
 	}
 
 	/// A history check sends up to ~14K characters; a fast model answers in a few seconds.
@@ -111,7 +123,7 @@ struct PracticeFeature {
 						var endpoint = endpoint
 						endpoint.timeout = max(endpoint.timeout, Self.checkTimeout)
 						do {
-							let answer = try await rewrite.complete(endpoint, keychain.read(role.keychainAccount), messages)
+							let answer = try await rewrite.complete(endpoint, keychain.read(endpoint.keychainAccount(role)), messages)
 							if let suggestions = VocabularySuggester.parse(answer, vocabulary: settings.vocabulary) {
 								await send(.suggestionsLoaded(suggestions, model: endpoint.model))
 								return
@@ -162,7 +174,10 @@ struct PracticeFeature {
 				let settings = state.hexSettings
 				let model = settings.practiceResearchModel.trimmingCharacters(in: .whitespaces)
 				var endpoint = settings.rewritePrimary
-				endpoint.model = model.isEmpty ? endpoint.model : model
+				// A search model is a router feature (OmniRoute's wp-search); other providers use their rewrite model.
+				if endpoint.provider == .custom, !model.isEmpty {
+					endpoint.model = model
+				}
 				endpoint.timeout = Self.researchTimeout
 				endpoint.reasoningEffort = ""
 				let edits = state.sentEdits.edits
@@ -177,7 +192,7 @@ struct PracticeFeature {
 				state.isResearching = true
 				return .run { [rewrite, keychain] send in
 					do {
-						for try await text in rewrite.stream(endpoint, keychain.read(RewriteEndpointRole.primary.keychainAccount), messages) {
+						for try await text in rewrite.stream(endpoint, keychain.read(endpoint.keychainAccount(.primary)), messages) {
 							await send(.researchProgress(text))
 						}
 						await send(.researchFinished)
@@ -214,6 +229,9 @@ struct PracticeFeature {
 
 			case .scanPracticeFolder, .practiceFolderScanned, .markTrained, .clearTrainedAudio:
 				return reduceStorage(&state, action)
+
+			case .checkRecordings, .recordingChecked, .recordingCheckProgress, .recordingCheckFinished, .cancelRecordingCheck:
+				return reduceRecordingCheck(&state, action)
 			}
 		}
 	}
@@ -485,6 +503,97 @@ extension PracticeFeature {
 				PracticeAudio.delete(recordings, in: .practiceFolderURL)
 				await send(.scanPracticeFolder)
 			}
+
+		default:
+			return .none
+		}
+	}
+}
+
+// MARK: - Recording check
+
+struct RecordingCheckProgress: Equatable {
+	var done: Int
+	var total: Int
+}
+
+extension PracticeFeature {
+	/// The engine whose opinion counts as independent: Cohere and Parakeet were trained apart, so a word both
+	/// hear the same way is most likely what was said. Parakeet's own variants share their mistakes.
+	static func secondOpinionEngine(for engine: String) -> String {
+		CohereModel(rawValue: engine) != nil ? ParakeetModel.multilingualV3.identifier : CohereModel.fourBit.identifier
+	}
+
+	func reduceRecordingCheck(_ state: inout State, _ action: Action) -> Effect<Action> {
+		switch action {
+		case .checkRecordings:
+			guard state.recordingCheck == nil else { return .none }
+			let engine = state.hexSettings.selectedModel
+			let other = Self.secondOpinionEngine(for: engine)
+			let recordings = state.practiceLog.recordings.values
+				.filter { $0.hasAudio && ($0.recognized == nil || $0.secondOpinionEngine != other) }
+				.sorted { $0.lineID < $1.lineID }
+			guard !recordings.isEmpty else {
+				state.recordingCheckNote = state.practiceLog.recordings.isEmpty ? "Record a few lines first." : nil
+				return .none
+			}
+			state.recordingCheck = RecordingCheckProgress(done: 0, total: recordings.count)
+			state.recordingCheckNote = nil
+			return .run { [transcription] send in
+				let options = DecodingOptions(language: "en", detectLanguage: false, chunkingStrategy: .vad)
+				let hasOther = await transcription.isModelDownloaded(other)
+				for (index, recording) in recordings.enumerated() {
+					try Task.checkCancellation()
+					let audio = URL.practiceFolderURL.appending(component: recording.audioFileName)
+					guard FileManager.default.fileExists(atPath: audio.path) else { continue }
+					var recognized = recording.recognized
+					if recognized == nil {
+						recognized = try? await transcription.transcribe(audio, recording.engine, options) { _ in }
+					}
+					var secondOpinion: String?
+					if hasOther {
+						secondOpinion = try? await transcription.transcribe(audio, other, options) { _ in }
+					}
+					await send(.recordingChecked(
+						lineID: recording.lineID, recognized: recognized, secondOpinion: secondOpinion,
+						engine: secondOpinion == nil ? nil : other
+					))
+					await send(.recordingCheckProgress(done: index + 1, total: recordings.count))
+				}
+				await transcription.prewarm(engine)
+				await send(.recordingCheckFinished(note: hasOther ? nil : "Download \(ParakeetModel(rawValue: other) != nil ? "Parakeet v3" : "Cohere Transcribe") in Settings for a second opinion. Without one, every word heard differently counts against the engine, even ones you read differently."))
+			} catch: { error, send in
+				await send(.recordingCheckFinished(note: error is CancellationError ? nil : error.localizedDescription))
+			}
+			.cancellable(id: CancelID.recordingCheck, cancelInFlight: true)
+
+		case let .recordingChecked(lineID, recognized, secondOpinion, engine):
+			state.$practiceLog.withLock { log in
+				guard var recording = log.recordings[lineID] else { return }
+				if let recognized, recording.recognized == nil {
+					recording.recognized = recognized
+					recording.wordErrorRate = WordErrorRate.rate(reference: recording.text, hypothesis: recognized)
+				}
+				if let secondOpinion, let engine {
+					recording.secondOpinion = secondOpinion
+					recording.secondOpinionEngine = engine
+				}
+				log.recordings[lineID] = recording
+			}
+			return .none
+
+		case let .recordingCheckProgress(done, total):
+			if state.recordingCheck != nil { state.recordingCheck = RecordingCheckProgress(done: done, total: total) }
+			return .none
+
+		case let .recordingCheckFinished(note):
+			state.recordingCheck = nil
+			state.recordingCheckNote = note
+			return .none
+
+		case .cancelRecordingCheck:
+			state.recordingCheck = nil
+			return .cancel(id: CancelID.recordingCheck)
 
 		default:
 			return .none

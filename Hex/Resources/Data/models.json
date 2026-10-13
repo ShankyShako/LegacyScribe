@@ -24,6 +24,14 @@
     "storageSize": "650MB"
   },
   {
+    "displayName": "Apple Speech (on-device)",
+    "internalName": "apple-speech-analyzer-en",
+    "size": "English",
+    "accuracyStars": 5,
+    "speedStars": 4,
+    "storageSize": "macOS"
+  },
+  {
     "displayName": "Whisper Tiny",
     "internalName": "openai_whisper-tiny",
     "size": "Multilingual",

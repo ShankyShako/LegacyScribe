@@ -17,6 +17,10 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
     /// Endpoints that failed before the rewrite succeeded or the raw transcript was pasted.
     public var rewriteFailures: [String]?
     public var latency: DictationLatency?
+    /// The recording was deleted under the audio retention rule; the text stays.
+    public var audioRemoved: Bool?
+    /// Why speech-to-text failed; the recording is kept so History can retry it. `text` is empty until then.
+    public var failure: String?
     
     public init(
         id: UUID = UUID(),
@@ -30,7 +34,9 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         rewriteMode: RewriteMode? = nil,
         rewrittenBy: String? = nil,
         rewriteFailures: [String]? = nil,
-        latency: DictationLatency? = nil
+        latency: DictationLatency? = nil,
+        audioRemoved: Bool? = nil,
+        failure: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -44,6 +50,8 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         self.rewrittenBy = rewrittenBy
         self.rewriteFailures = rewriteFailures
         self.latency = latency
+        self.audioRemoved = audioRemoved
+        self.failure = failure
     }
 }
 

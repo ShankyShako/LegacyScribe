@@ -29,6 +29,9 @@ struct AudioInputDevice: Identifiable, Equatable {
 struct RecordingClient {
   var startRecording: @Sendable () async -> Void = {}
   var stopRecording: @Sendable () async -> RecordingStopResult = { .ignored(.noActiveRecording) }
+  /// The first few seconds of the dictation being recorded (16 kHz mono floats), for Super's early
+  /// detection; empty when nothing is recording or the AVAudioRecorder fallback is in use.
+  var recordingHead: @Sendable () async -> [Float] = { [] }
   var requestMicrophoneAccess: @Sendable () async -> Bool = { false }
   var observeAudioLevel: @Sendable () async -> AsyncStream<Meter> = { AsyncStream { _ in } }
   var getAvailableInputDevices: @Sendable () async -> [AudioInputDevice] = { [] }
@@ -46,6 +49,7 @@ extension RecordingClient: DependencyKey {
     return Self(
       startRecording: { await live.startRecording() },
       stopRecording: { await live.stopRecording() },
+      recordingHead: { await live.recordingHead() },
       requestMicrophoneAccess: { await live.requestMicrophoneAccess() },
       observeAudioLevel: { await live.observeAudioLevel() },
       getAvailableInputDevices: { await live.getAvailableInputDevices() },
@@ -1062,9 +1066,13 @@ actor RecordingClientLive {
     reason: String,
     forceRestart: Bool = false
   ) throws {
-    if forceRestart || captureControllerDeviceID != deviceID {
+    // Voice isolation is fixed when the engine is armed, so a change in the setting rebuilds it.
+    let wantsVoiceIsolation = hexSettings.voiceIsolationEnabled
+    let isolationChanged = captureController.isRunning && captureController.voiceIsolation != wantsVoiceIsolation
+    captureController.voiceIsolation = wantsVoiceIsolation
+    if forceRestart || isolationChanged || captureControllerDeviceID != deviceID {
       recordingLogger.notice(
-        "Restarting capture engine reason=\(reason) previousInput=\(self.describeDevice(self.captureControllerDeviceID)) newInput=\(self.describeDevice(deviceID)) force=\(forceRestart)"
+        "Restarting capture engine reason=\(reason) previousInput=\(self.describeDevice(self.captureControllerDeviceID)) newInput=\(self.describeDevice(deviceID)) force=\(forceRestart) voiceIsolation=\(wantsVoiceIsolation)"
       )
       stopCaptureController(reason: forceRestart ? "restart-\(reason)" : "input-device-changed")
     }
@@ -1654,6 +1662,10 @@ actor RecordingClientLive {
 
   func observeAudioLevel() -> AsyncStream<Meter> {
     meterStream
+  }
+
+  func recordingHead() -> [Float] {
+    captureController.recordingHead()
   }
 
   func warmUpRecorder() async {

@@ -91,7 +91,7 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 }
 
 // Convenience helper for loading the bundled models.json once.
-private enum CuratedModelLoader {
+enum CuratedModelLoader {
 	private static let bundledModels: [CuratedModelInfo] = {
 		guard let url = Bundle.main.url(forResource: "models", withExtension: "json") ??
 			Bundle.main.url(forResource: "models", withExtension: "json", subdirectory: "Data")

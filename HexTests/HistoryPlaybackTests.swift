@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import HexCore
 import XCTest
 
 @testable import Hex
@@ -37,5 +38,28 @@ final class HistoryPlaybackTests: XCTestCase {
 
     XCTAssertEqual(store.state.playingTranscriptID, transcriptID)
     XCTAssertEqual(store.state.playbackID, playbackID)
+  }
+
+  func testFirstPlayWaitsForWordTimingsBeforeTheAudioStarts() async {
+    let id = UUID()
+    let words = [SpokenWord(word: "hello", start: 0.1, end: 0.4)]
+    let requested = LockIsolated(0)
+    let transcript = Transcript(id: id, timestamp: Date(), text: "hello", audioPath: URL(fileURLWithPath: "/tmp/missing.flac"), duration: 1)
+    let store = TestStore(
+      initialState: HistoryFeature.State(transcriptionHistory: Shared(value: .init(history: [transcript])))
+    ) {
+      HistoryFeature()
+    } withDependencies: {
+      $0.transcription.timedWords = { _, _, _ in
+        requested.withValue { $0 += 1 }
+        return words
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.playTranscript(id))
+    XCTAssertNil(store.state.audioPlayerController, "audio started before the timings")
+    await store.receive(\.playbackReady)
+    XCTAssertEqual(requested.value, 1)
   }
 }

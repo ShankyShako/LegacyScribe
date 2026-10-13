@@ -12,6 +12,7 @@ let package = Package(
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.11.0"),
         .package(url: "https://github.com/apple/swift-log", from: "1.9.1"),
         .package(url: "https://github.com/pointfreeco/xctest-dynamic-overlay", from: "1.8.0"),
+        .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.1"),
     ],
     targets: [
 	    .target(
@@ -24,6 +25,7 @@ let package = Package(
 	            // @DependencyClient expands to IssueReporting calls; without this the dynamic
 	            // HexCore framework Xcode builds for the test host fails to link.
 	            .product(name: "IssueReporting", package: "xctest-dynamic-overlay"),
+	            .product(name: "GRDB", package: "GRDB.swift"),
 	        ],
 	        path: "Sources/HexCore",
 	        linkerSettings: [

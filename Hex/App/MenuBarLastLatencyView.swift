@@ -30,6 +30,18 @@ struct MenuBarRewriteModePicker: View {
   }
 }
 
+/// "Private Mode" with a checkmark: no network at all while it's on.
+struct MenuBarPrivateModeToggle: View {
+  @Shared(.hexSettings) var hexSettings: HexSettings
+
+  var body: some View {
+    Toggle("Private Mode", isOn: Binding(
+      get: { hexSettings.privateMode },
+      set: { isOn in $hexSettings.withLock { $0.privateMode = isOn } }
+    ))
+  }
+}
+
 /// Helix icon, plus a letter when the rewrite mode isn't the default (R = Raw, P = Prompt).
 struct MenuBarIconLabel: View {
   @Shared(.hexSettings) var hexSettings: HexSettings
@@ -45,6 +57,9 @@ struct MenuBarIconLabel: View {
         Image(nsImage: image)
       } else {
         Image(systemName: "waveform")
+      }
+      if hexSettings.privateMode {
+        Image(systemName: "lock.fill")
       }
       if let badge = hexSettings.rewriteMode.menuBarBadge {
         Text(badge)

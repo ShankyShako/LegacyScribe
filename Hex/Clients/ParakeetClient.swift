@@ -105,6 +105,14 @@ actor ParakeetClient {
     return result.text
   }
 
+  /// The words Parakeet hears in `url`, each with the time its tokens were decoded at.
+  func timedWords(_ url: URL) async throws -> [SpokenWord] {
+    guard let asr else { throw NSError(domain: "Parakeet", code: -1, userInfo: [NSLocalizedDescriptionKey: "Parakeet not initialized"]) }
+    var decoderState = TdtDecoderState.make(decoderLayers: await asr.decoderLayerCount)
+    let result = try await asr.transcribe(url, decoderState: &decoderState)
+    return WordMatcher.words(fromPieces: (result.tokenTimings ?? []).map { ($0.token, $0.startTime, $0.endTime) })
+  }
+
   /// Deletes this variant's model folder and resets state. Only our own `Models/fluidaudio`
   /// folder is touched: unsandboxed, `~/Library/Application Support/FluidAudio` and
   /// `~/.cache` are shared with other FluidAudio apps.
@@ -144,6 +152,7 @@ actor ParakeetClient {
     )
   }
   func transcribe(_ url: URL) async throws -> String { throw NSError(domain: "Parakeet", code: -3, userInfo: [NSLocalizedDescriptionKey: "Parakeet not available"]) }
+  func timedWords(_ url: URL) async throws -> [SpokenWord] { throw NSError(domain: "Parakeet", code: -3, userInfo: [NSLocalizedDescriptionKey: "Parakeet not available"]) }
   func deleteCaches(modelName: String) async throws {}
 }
 

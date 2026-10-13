@@ -25,8 +25,8 @@ struct ModeCyclerTests {
 		var cycler = ModeCycler()
 		#expect(feed(&cycler, [ctrl, ctrlOpt, ctrl, ctrlOpt, ctrl, ctrlOpt, none]) == [
 			.began(highlight: .prompt), .optionReleased,
-			.advanced(highlight: .raw), .optionReleased,
-			.advanced(highlight: .clean), .committed(.clean),
+			.advanced(highlight: .notes), .optionReleased,
+			.advanced(highlight: .raw), .committed(.raw),
 		])
 	}
 
@@ -34,11 +34,11 @@ struct ModeCyclerTests {
 	func holdingOptionAdvancesOnTheCallersTimer() {
 		var cycler = ModeCycler()
 		_ = feed(&cycler, [ctrl, ctrlOpt])
+		#expect(cycler.advance() == .notes)
 		#expect(cycler.advance() == .raw)
-		#expect(cycler.advance() == .clean)
 		#expect(feed(&cycler, [ctrl]) == [.optionReleased])
 		#expect(cycler.advance() == nil)
-		#expect(feed(&cycler, [none]) == [.committed(.clean)])
+		#expect(feed(&cycler, [none]) == [.committed(.raw)])
 		#expect(cycler.advance() == nil)
 	}
 
@@ -68,7 +68,7 @@ struct ModeCyclerTests {
 		var cycler = ModeCycler()
 		let rightOption = KeyEvent(key: nil, modifiers: [.option.with(side: .right)])
 		#expect(feed(&cycler, [rightOption, ctrlOpt, rightOption], current: .clean) == [.stepped(.prompt)])
-		#expect(feed(&cycler, [ctrlOpt, rightOption, none], current: .prompt) == [.stepped(.raw)])
+		#expect(feed(&cycler, [ctrlOpt, rightOption, none], current: .notes) == [.stepped(.raw)])
 	}
 
 	@Test
@@ -90,6 +90,6 @@ struct ModeCyclerTests {
 	@Test
 	func firstPickFollowsTheCurrentMode() {
 		var cycler = ModeCycler()
-		#expect(feed(&cycler, [ctrl, ctrlOpt], current: .prompt) == [.began(highlight: .raw)])
+		#expect(feed(&cycler, [ctrl, ctrlOpt], current: .prompt) == [.began(highlight: .notes)])
 	}
 }

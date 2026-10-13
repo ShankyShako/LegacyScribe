@@ -1,3 +1,4 @@
+import Combine
 import ComposableArchitecture
 import HexCore
 import SwiftUI
@@ -10,6 +11,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	var settingsWindow: NSWindow?
 	var statusItem: NSStatusItem!
 	private var launchedAtLogin = false
+	private var privateModeObservation: AnyCancellable?
 
 	@Dependency(\.soundEffects) var soundEffect
 	@Dependency(\.recording) var recording
@@ -23,6 +25,12 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 			appLogger.debug("Running in testing mode")
 			return
 		}
+
+		// Private mode follows the setting wherever it's changed (menu bar, Settings, the settings file).
+		privateModeObservation = $hexSettings.publisher
+			.map(\.privateMode)
+			.removeDuplicates()
+			.sink { NetworkPolicy.setPrivate($0) }
 
 		Task {
 			await soundEffect.preloadSounds()
@@ -51,6 +59,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 
 		// Start long-running app effects (global hotkeys, permissions, etc.)
 		startLifecycleTasksIfNeeded()
+		AppUpdater.shared.start()
 
 		// Then present main views
 		presentMainView()
@@ -154,6 +163,17 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 			NSApp.setActivationPolicy(.regular)
 		} else {
 			NSApp.setActivationPolicy(.accessory)
+		}
+	}
+
+	/// `legacyscribe://` (Release) and `legacyscribe-debug://` (Debug), registered through `URL_SCHEME`.
+	func application(_: NSApplication, open urls: [URL]) {
+		for url in urls {
+			guard let action = URLAction(url: url) else {
+				HexLog.app.notice("Ignored an unknown URL action: \(url.absoluteString, privacy: .private)")
+				continue
+			}
+			HexApp.appStore.send(.transcription(.urlAction(action)))
 		}
 	}
 

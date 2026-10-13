@@ -1,5 +1,5 @@
 {
-  "originHash" : "f8d1712e9459f81a92d18b0536d69a195e7d70cbbafdf4e5f496cde4caa0f591",
+  "originHash" : "d8611dac7039b2c80ce88454f758c645eaaa43fb243f14f5a59b96d3467bae15",
   "pins" : [
     {
       "identity" : "combine-schedulers",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "0b1f46289fe27d95b5e66ad8be46e64f5ee02ae7",
         "version" : "0.17.5"
+      }
+    },
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
       }
     },
     {
@@ -87,6 +96,15 @@
       "state" : {
         "branch" : "master",
         "revision" : "9c0de6c233f29d892e86dda68c2dd791aa10670c"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
       }
     },
     {

@@ -4,6 +4,14 @@ public extension URL {
 	static var hexApplicationSupport: URL {
 		get throws {
 			let fm = FileManager.default
+			#if DEBUG
+			// Test harnesses (the notes crash test) run against a scratch data root.
+			if let root = ProcessInfo.processInfo.environment["LEGACYSCRIBE_DATA_ROOT"], !root.isEmpty {
+				let url = URL(fileURLWithPath: root, isDirectory: true)
+				try fm.createDirectory(at: url, withIntermediateDirectories: true)
+				return url
+			}
+			#endif
 			let appSupport = try fm.url(
 				for: .applicationSupportDirectory,
 				in: .userDomainMask,

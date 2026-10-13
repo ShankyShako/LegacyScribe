@@ -22,3 +22,6 @@ ExportOptions.plist
 
 # Machine-local signing (see Local.xcconfig.example)
 Local.xcconfig
+
+# Coverage data from running the Debug build directly (notes harness)
+*.profraw

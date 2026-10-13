@@ -31,6 +31,10 @@ lsbench --engine "cohere:$M/cohere-transcribe-03-2026-mlx-4bit" --fixtures "$F" 
 lsbench --engine parakeet:v3 --fixtures "$F"        # also: parakeet:v2, parakeet:ultra, parakeet:phonon2
 ```
 
+Notes speech gate: `lsbench vad [--engine cohere:<dir>] <wav or folder>...` prints what Silero VAD, with the app's notes settings, keeps of each clip. With `--engine`, each clip is also transcribed whole and gated, to compare what silence or noise turns into.
+
+On-device rewrite: `lsbench rewrite --model <mlx-dir> --samples <file.jsonl> [--json out.json] [--no-think]` runs the app's rewrite prompts through an MLX model. Each sample line is `{"mode": "clean"|"prompt", "transcript": "…", "reference": "…"}`. Pass `--no-think` for Qwen3's hybrid models (1.7B, 8B). `samples/self-correction.jsonl` checks the self-correction rule (Clean corrections, lookalikes, Prompt corrections). A `"mode": "super"` line runs `SuperPrompt`: the transcript is the instruction, with `"selection"` to edit or `"field"` (text before the cursor) to write into; `samples/super.jsonl` has 10 of each. Answers the app would refuse are marked REJECTED.
+
 `--reload` adds what the app's load-per-dictation costs: the footprint between clips, right after unloading, 5 s later, and the time to load again with warm-up.
 
 Parakeet models download on first use into `~/Library/Application Support/LegacyScribe/Models/fluidaudio/`, the same place the app uses. Cohere checkpoints must already be on disk; fetch them with the resumable, checksum-verified downloader:

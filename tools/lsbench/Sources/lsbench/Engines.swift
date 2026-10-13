@@ -1,5 +1,6 @@
 import FluidAudio
 import Foundation
+import HexCore
 import MLX
 import MLXAudioSTT
 
@@ -74,6 +75,27 @@ final class ParakeetEngine: BenchEngine {
         guard let manager else { throw BenchError.notLoaded }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         return try await manager.transcribe(samples, decoderState: &state).text
+    }
+}
+
+/// Apple's SpeechAnalyzer (macOS 26), through the same `AppleSpeech` code the app dictates with. It reads
+/// files, so each clip goes through a temporary 16-bit WAV.
+final class AppleSpeechBenchEngine: BenchEngine {
+    let name = "apple:speech-analyzer"
+
+    func load(warmup: [Float]) async throws {
+        if !(await AppleSpeech.isInstalled()) {
+            FileHandle.standardError.write("installing Apple's English speech model…\n".data(using: .utf8)!)
+            try await AppleSpeech.install { _ in }
+        }
+        _ = try await transcribe(warmup)
+    }
+
+    func transcribe(_ samples: [Float]) async throws -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("lsbench-apple-\(UUID().uuidString).wav")
+        try PCM16WAV.data(samples: samples).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try await AppleSpeech.transcribe(url)
     }
 }
 

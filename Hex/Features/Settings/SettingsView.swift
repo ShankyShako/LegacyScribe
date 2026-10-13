@@ -31,7 +31,6 @@ struct SettingsView: View {
 			}
 
 			HotKeySectionView(store: store)
-			RewriteSectionView(store: store)
           
 			if microphonePermission == .granted {
 				MicrophoneSelectionSectionView(store: store)

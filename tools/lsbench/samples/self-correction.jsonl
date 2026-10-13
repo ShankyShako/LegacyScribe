@@ -1,0 +1,13 @@
+{"mode": "clean", "transcript": "let's meet at two no make it three on thursday", "reference": "Let's meet at three on Thursday."}
+{"mode": "clean", "transcript": "send the report to anna sorry i mean maria by friday", "reference": "Send the report to Maria by Friday."}
+{"mode": "clean", "transcript": "we need about fifty actually sixty chairs for the event", "reference": "We need about sixty chairs for the event."}
+{"mode": "clean", "transcript": "i'll bring the cake um scratch that i'll bring drinks instead", "reference": "I'll bring drinks instead."}
+{"mode": "clean", "transcript": "the meeting is on the fourth wait no the fifth of november", "reference": "The meeting is on the fifth of November."}
+{"mode": "clean", "transcript": "no i don't think we should ship it this week", "reference": "No, I don't think we should ship it this week."}
+{"mode": "clean", "transcript": "i actually liked the second draft better than the first", "reference": "I actually liked the second draft better than the first."}
+{"mode": "clean", "transcript": "when i say it's urgent i mean it we need this today", "reference": "When I say it's urgent, I mean it. We need this today."}
+{"mode": "clean", "transcript": "is it two or three people coming i'm not sure", "reference": "Is it two or three people coming? I'm not sure."}
+{"mode": "clean", "transcript": "she said no to the offer and actually that was the right call", "reference": "She said no to the offer, and actually that was the right call."}
+{"mode": "prompt", "transcript": "Fix the login button. It should be blue, no, green, to match the brand, and keep the rounded corners.", "reference": "Fix the login button: make it green to match the brand, and keep the rounded corners."}
+{"mode": "prompt", "transcript": "Add a retry to the upload function with three, no, five attempts, and log each failure.", "reference": "Add a retry to the upload function with five attempts, and log each failure."}
+{"mode": "prompt", "transcript": "Rename the config file to settings dot json. Actually, scratch that, call it app config dot json.", "reference": "Rename the config file to app-config.json."}

@@ -8,11 +8,14 @@ public enum ChatCompletionAPI {
 	public struct Request: Encodable, Equatable, Sendable {
 		public var model: String
 		public var messages: [ChatMessage]
-		public var temperature: Double
+		/// Omitted when nil: OpenAI's reasoning models accept only their default.
+		public var temperature: Double?
 		public var maxTokens: Int
 		/// Omitted from the body when nil; not every model accepts it.
 		public var reasoningEffort: String?
 		public var stream: Bool = false
+		/// Sends the limit as `max_completion_tokens`, which OpenAI's current models require instead of `max_tokens`.
+		public var usesMaxCompletionTokens = false
 
 		public init(model: String, messages: [ChatMessage], temperature: Double = 0.2, maxTokens: Int = ChatCompletionAPI.defaultMaxTokens, reasoningEffort: String? = nil) {
 			self.model = model
@@ -25,7 +28,26 @@ public enum ChatCompletionAPI {
 		enum CodingKeys: String, CodingKey {
 			case model, messages, temperature, stream
 			case maxTokens = "max_tokens"
+			case maxCompletionTokens = "max_completion_tokens"
 			case reasoningEffort = "reasoning_effort"
+		}
+
+		public func encode(to encoder: Encoder) throws {
+			var container = encoder.container(keyedBy: CodingKeys.self)
+			try container.encode(model, forKey: .model)
+			try container.encode(messages, forKey: .messages)
+			try container.encodeIfPresent(temperature, forKey: .temperature)
+			try container.encode(maxTokens, forKey: usesMaxCompletionTokens ? .maxCompletionTokens : .maxTokens)
+			try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+			try container.encode(stream, forKey: .stream)
+		}
+
+		/// OpenAI's own API: default temperature and `max_completion_tokens`. Other OpenAI-compatible servers
+		/// (Groq, Gemini, OpenRouter, Ollama, routers) keep the classic fields.
+		public mutating func adapt(for provider: RewriteProvider) {
+			guard provider == .openAI else { return }
+			temperature = nil
+			usesMaxCompletionTokens = true
 		}
 	}
 

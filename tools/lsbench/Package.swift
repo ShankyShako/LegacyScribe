@@ -9,6 +9,9 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", revision: "dbe5eaac964e"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.17.5"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "3.32.3"),
+        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.1.6"),
+        .package(path: "../../HexCore"),
     ],
     targets: [
         .executableTarget(
@@ -17,6 +20,10 @@ let package = Package(
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "HexCore", package: "HexCore"),
             ],
             path: "Sources/lsbench"
         ),

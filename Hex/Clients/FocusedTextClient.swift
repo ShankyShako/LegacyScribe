@@ -10,6 +10,34 @@ import os
 struct FocusedText: Equatable, Sendable {
 	var bundleID: String?
 	var value: String
+	/// The insertion point (start of the selection) as a UTF-16 offset into `value`, when the app reports it.
+	var cursor: Int?
+	/// The selection's length in UTF-16 units; 0 when nothing is selected.
+	var selectionLength: Int = 0
+
+	/// The text before the cursor and after the selection (which a paste replaces); nil without a cursor.
+	var surroundings: (before: String, after: String)? {
+		guard let cursor else { return nil }
+		let utf16 = value.utf16
+		guard cursor >= 0, cursor + selectionLength <= utf16.count,
+		      let start = utf16.index(utf16.startIndex, offsetBy: cursor, limitedBy: utf16.endIndex)
+		        .flatMap({ $0.samePosition(in: value) }),
+		      let end = utf16.index(utf16.startIndex, offsetBy: cursor + max(selectionLength, 0), limitedBy: utf16.endIndex)
+		        .flatMap({ $0.samePosition(in: value) })
+		else { return nil }
+		return (String(value[..<start]), String(value[end...]))
+	}
+
+	/// The selected text; nil when nothing is selected or the range doesn't fit `value`.
+	var selectedText: String? {
+		guard let cursor, selectionLength > 0, cursor >= 0 else { return nil }
+		let utf16 = value.utf16
+		guard let start = utf16.index(utf16.startIndex, offsetBy: cursor, limitedBy: utf16.endIndex),
+		      let end = utf16.index(start, offsetBy: selectionLength, limitedBy: utf16.endIndex),
+		      let from = start.samePosition(in: value), let to = end.samePosition(in: value)
+		else { return nil }
+		return String(value[from ..< to])
+	}
 }
 
 /// Reads the focused text field through Accessibility, for Prompt-mode merges and for capturing what a
@@ -52,11 +80,18 @@ extension FocusedTextClient: DependencyKey {
 			AXUIElementSetMessagingTimeout(focused, messagingTimeout)
 			if attribute(focused, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole { return nil }
 			// Editable text has a selection range; buttons and static text don't.
-			guard attribute(focused, kAXSelectedTextRangeAttribute) != nil,
+			guard let rangeRef = attribute(focused, kAXSelectedTextRangeAttribute),
 			      let value = attribute(focused, kAXValueAttribute) as? String,
 			      value.count <= maxCharacters
 			else { return nil }
-			return FocusedText(bundleID: app.bundleIdentifier, value: value)
+			var range = CFRange()
+			let hasRange = CFGetTypeID(rangeRef) == AXValueGetTypeID() && AXValueGetValue(rangeRef as! AXValue, .cfRange, &range)
+			return FocusedText(
+				bundleID: app.bundleIdentifier,
+				value: value,
+				cursor: hasRange ? range.location : nil,
+				selectionLength: hasRange ? range.length : 0
+			)
 		})
 	}
 

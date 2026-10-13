@@ -1,5 +1,13 @@
 import Foundation
 
+/// What writes a notes session's notes.
+public enum NotesWriter: String, Codable, CaseIterable, Equatable, Sendable {
+	/// A downloaded model run in-process (`LocalLLMModel`).
+	case onDevice
+	/// Ollama on this Mac, through its native API.
+	case ollama
+}
+
 public enum RecordingAudioBehavior: String, Codable, CaseIterable, Equatable, Sendable {
 	case pauseMedia
 	case mute
@@ -17,22 +25,11 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		.init(pattern: "hm+")
 	]
 
-	/// An OpenAI-compatible router (OmniRoute's default port) on this Mac; point it at your own
-	/// host in Settings. Groq's gpt-oss-120b rewrote a dictation in 0.6–1.0 s (2026-10-06);
-	/// Gemini Flash took 2–30 s.
-	public static let defaultRewritePrimary = RewriteEndpoint(
-		baseURL: "http://localhost:20128/v1",
-		model: "groq/openai/gpt-oss-120b",
-		reasoningEffort: "low",
-		timeout: 5
-	)
-	/// Local Ollama: 0.7–2.6 s warm, ~4.5 s when the model has to load first.
-	public static let defaultRewriteFallback = RewriteEndpoint(
-		baseURL: "http://localhost:11434/v1",
-		model: "qwen3:8b",
-		reasoningEffort: "none",
-		timeout: 10
-	)
+	/// A downloaded model on this Mac: works without an account, a key or another app. Until it's
+	/// downloaded, dictations are pasted as recognized.
+	public static let defaultRewritePrimary = RewriteEndpoint.preset(.onDevice)
+	/// Off by default; a cloud key is the usual second choice.
+	public static let defaultRewriteFallback = RewriteEndpoint.preset(.groq)
 
 	public static var defaultPasteLastTranscriptHotkeyDescription: String {
 		let modifiers = defaultPasteLastTranscriptHotkey.modifiers.sorted.map { $0.stringValue }.joined()
@@ -72,7 +69,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	/// Tried when the primary fails or times out; if this fails too, the raw transcript is pasted.
 	public var rewriteFallback: RewriteEndpoint
 	public var rewriteFallbackEnabled: Bool
-	/// ⌃⌥1–3 switch the rewrite mode from any app.
+	/// ⌃⌥1–4 switch the mode from any app.
 	public var rewriteModeShortcutsEnabled: Bool
 	/// Terms the LLM should spell exactly (names, products, jargon).
 	public var vocabulary: [String]
@@ -84,11 +81,45 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var modeCyclerEnabled: Bool
 	/// Prompt mode merges a dictation into the text already in the focused field (`FieldMerge`).
 	public var mergeIntoFieldEnabled: Bool
+	/// Names from the text around the cursor (`ContextTerms`) become spelling hints for the rewrite and the
+	/// speech engine. Read through Accessibility when the talk key goes down.
+	public var contextTermsEnabled: Bool
 	/// Remember what each dictation became when Enter was pressed (`SentEdit`), read through Accessibility.
 	public var captureSentEdits: Bool
+	/// Fit each paste to the text around the cursor: case, closing period, spaces (`InsertionAdjuster`).
+	public var matchSurroundingText: Bool
+	/// `legacyscribe://start`, `toggle` and `notes/start` may turn the microphone on (`URLAction`). Off by
+	/// default because any web page can open the URL; stop, cancel and mode changes always work.
+	public var urlActionsEnabled: Bool
+	/// A dictation that starts with "super" is an instruction: it edits the selection or writes at the cursor
+	/// (`SuperTrigger`).
+	public var superEnabled: Bool
+	/// While recording, Apple Speech listens to the first seconds for "super" so the indicator shows it early.
+	public var superEarlyDetection: Bool
+	/// Times the "say 'super' first" hint was shown for a selection; it stops after `SuperTrigger.hintLimit`.
+	public var superHintsShown: Int
 	/// Model (on the primary endpoint) that answers the Practice tab's research question; it should be able
 	/// to search the web, e.g. an OmniRoute search combo.
 	public var practiceResearchModel: String
+	/// What writes a notes session's notes. Both keep the transcript on this Mac.
+	public var notesWriter: NotesWriter
+	/// On-device model (`LocalLLMModel` repository) that writes notes when `notesWriter` is `.onDevice`.
+	public var notesLocalModel: String
+	/// Ollama's root URL for notes sessions (its own API, not `/v1`).
+	public var notesOllamaURL: String
+	/// Ollama model that writes notes when `notesWriter` is `.ollama`.
+	public var notesModel: String
+	/// Folder that also gets each session's notes as Markdown (an Obsidian vault, say); nil keeps them in the app only.
+	public var notesExportFolder: String?
+	/// Dictation records through Apple's voice processing, which keeps the voice nearest the microphone and
+	/// lowers other voices and noise; the system's Voice Isolation mic mode applies on top.
+	public var voiceIsolationEnabled: Bool
+	/// The same for notes sessions (off by default: a meeting may need every voice in the room).
+	public var voiceIsolationInNotes: Bool
+	/// Dictation recordings older than this many days are deleted (the text stays); 0 keeps them forever.
+	public var audioRetentionDays: Int
+	/// No network at all (`NetworkPolicy`): only the on-device model rewrites, no update checks or downloads.
+	public var privateMode: Bool
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -126,15 +157,30 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		rewriteMode: RewriteMode = .clean,
 		rewritePrimary: RewriteEndpoint = HexSettings.defaultRewritePrimary,
 		rewriteFallback: RewriteEndpoint = HexSettings.defaultRewriteFallback,
-		rewriteFallbackEnabled: Bool = true,
+		rewriteFallbackEnabled: Bool = false,
 		rewriteModeShortcutsEnabled: Bool = true,
 		vocabulary: [String] = [],
 		rewriteInstructions: [String: String] = [:],
 		codeTalkEnabled: Bool = true,
 		modeCyclerEnabled: Bool = true,
 		mergeIntoFieldEnabled: Bool = true,
+		contextTermsEnabled: Bool = true,
 		captureSentEdits: Bool = true,
-		practiceResearchModel: String = "wp-search"
+		matchSurroundingText: Bool = true,
+		urlActionsEnabled: Bool = false,
+		superEnabled: Bool = true,
+		superEarlyDetection: Bool = true,
+		superHintsShown: Int = 0,
+		practiceResearchModel: String = "wp-search",
+		notesWriter: NotesWriter = .onDevice,
+		notesLocalModel: String = LocalLLMModel.recommended.repository,
+		notesOllamaURL: String = "http://localhost:11434",
+		notesModel: String = "qwen3:8b",
+		notesExportFolder: String? = nil,
+		voiceIsolationEnabled: Bool = false,
+		voiceIsolationInNotes: Bool = false,
+		audioRetentionDays: Int = AudioRetention.defaultDays,
+		privateMode: Bool = false
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -172,8 +218,23 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.codeTalkEnabled = codeTalkEnabled
 		self.modeCyclerEnabled = modeCyclerEnabled
 		self.mergeIntoFieldEnabled = mergeIntoFieldEnabled
+		self.contextTermsEnabled = contextTermsEnabled
 		self.captureSentEdits = captureSentEdits
+		self.matchSurroundingText = matchSurroundingText
+		self.urlActionsEnabled = urlActionsEnabled
+		self.superEnabled = superEnabled
+		self.superEarlyDetection = superEarlyDetection
+		self.superHintsShown = superHintsShown
 		self.practiceResearchModel = practiceResearchModel
+		self.notesWriter = notesWriter
+		self.notesLocalModel = notesLocalModel
+		self.notesOllamaURL = notesOllamaURL
+		self.notesModel = notesModel
+		self.notesExportFolder = notesExportFolder
+		self.voiceIsolationEnabled = voiceIsolationEnabled
+		self.voiceIsolationInNotes = voiceIsolationInNotes
+		self.audioRetentionDays = audioRetentionDays
+		self.privateMode = privateMode
 		normalizeDoubleTapSettings()
 	}
 
@@ -234,8 +295,23 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case codeTalkEnabled
 	case modeCyclerEnabled
 	case mergeIntoFieldEnabled
+	case contextTermsEnabled
 	case captureSentEdits
+	case matchSurroundingText
+	case urlActionsEnabled
+	case superEnabled
+	case superEarlyDetection
+	case superHintsShown
 	case practiceResearchModel
+	case notesWriter
+	case notesLocalModel
+	case notesOllamaURL
+	case notesModel
+	case notesExportFolder
+	case voiceIsolationEnabled
+	case voiceIsolationInNotes
+	case audioRetentionDays
+	case privateMode
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -381,8 +457,39 @@ private enum HexSettingsSchema {
 		SettingsField(.codeTalkEnabled, keyPath: \.codeTalkEnabled, default: defaults.codeTalkEnabled).eraseToAny(),
 		SettingsField(.modeCyclerEnabled, keyPath: \.modeCyclerEnabled, default: defaults.modeCyclerEnabled).eraseToAny(),
 		SettingsField(.mergeIntoFieldEnabled, keyPath: \.mergeIntoFieldEnabled, default: defaults.mergeIntoFieldEnabled).eraseToAny(),
+		SettingsField(.contextTermsEnabled, keyPath: \.contextTermsEnabled, default: defaults.contextTermsEnabled).eraseToAny(),
 		SettingsField(.captureSentEdits, keyPath: \.captureSentEdits, default: defaults.captureSentEdits).eraseToAny(),
-		SettingsField(.practiceResearchModel, keyPath: \.practiceResearchModel, default: defaults.practiceResearchModel).eraseToAny()
+		SettingsField(.matchSurroundingText, keyPath: \.matchSurroundingText, default: defaults.matchSurroundingText).eraseToAny(),
+		SettingsField(.urlActionsEnabled, keyPath: \.urlActionsEnabled, default: defaults.urlActionsEnabled).eraseToAny(),
+		SettingsField(.superEnabled, keyPath: \.superEnabled, default: defaults.superEnabled).eraseToAny(),
+		SettingsField(.superEarlyDetection, keyPath: \.superEarlyDetection, default: defaults.superEarlyDetection).eraseToAny(),
+		SettingsField(.superHintsShown, keyPath: \.superHintsShown, default: defaults.superHintsShown).eraseToAny(),
+		SettingsField(.practiceResearchModel, keyPath: \.practiceResearchModel, default: defaults.practiceResearchModel).eraseToAny(),
+		SettingsField(
+			.notesWriter,
+			keyPath: \.notesWriter,
+			default: defaults.notesWriter,
+			decode: { container, key, defaultValue in
+				if let value = try? container.decodeIfPresent(NotesWriter.self, forKey: key) { return value }
+				// Settings saved before the on-device writer existed wrote notes with Ollama.
+				return container.contains(.notesModel) ? .ollama : defaultValue
+			}
+		).eraseToAny(),
+		SettingsField(.notesLocalModel, keyPath: \.notesLocalModel, default: defaults.notesLocalModel).eraseToAny(),
+		SettingsField(.notesOllamaURL, keyPath: \.notesOllamaURL, default: defaults.notesOllamaURL).eraseToAny(),
+		SettingsField(.notesModel, keyPath: \.notesModel, default: defaults.notesModel).eraseToAny(),
+		SettingsField(
+			.notesExportFolder,
+			keyPath: \.notesExportFolder,
+			default: defaults.notesExportFolder,
+			encode: { container, key, value in
+				try container.encodeIfPresent(value, forKey: key)
+			}
+		).eraseToAny(),
+		SettingsField(.voiceIsolationEnabled, keyPath: \.voiceIsolationEnabled, default: defaults.voiceIsolationEnabled).eraseToAny(),
+		SettingsField(.voiceIsolationInNotes, keyPath: \.voiceIsolationInNotes, default: defaults.voiceIsolationInNotes).eraseToAny(),
+		SettingsField(.audioRetentionDays, keyPath: \.audioRetentionDays, default: defaults.audioRetentionDays).eraseToAny(),
+		SettingsField(.privateMode, keyPath: \.privateMode, default: defaults.privateMode).eraseToAny()
 	]
 }
 
