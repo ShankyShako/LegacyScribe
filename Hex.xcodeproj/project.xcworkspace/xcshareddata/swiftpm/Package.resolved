@@ -1,5 +1,5 @@
 {
-  "originHash" : "d8611dac7039b2c80ce88454f758c645eaaa43fb243f14f5a59b96d3467bae15",
+  "originHash" : "8580884d66bfb542ca7429de6bbbb3b30e5558f4f3ce496c4c023b89bb2105ab",
   "pins" : [
     {
       "identity" : "combine-schedulers",
@@ -57,10 +57,9 @@
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift.git",
+      "location" : "https://github.com/ShankyShako/mlx-swift.git",
       "state" : {
-        "revision" : "19601207e9a0de51e03ee6ec0c3c5f3784275075",
-        "version" : "0.32.3"
+        "revision" : "37407d1ca8c3d138e993d5ef84ac48a13793f0dc"
       }
     },
     {

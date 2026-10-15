@@ -114,7 +114,11 @@ class KeyEventMonitorClientLive {
   private let inputMonitoringTrustProvider: @Sendable () -> Bool
   @Shared(.hotkeyPermissionState) private var hotkeyPermissionState: HotkeyPermissionState
 
+  // Fast while a permission is missing so a grant takes effect at once; slow once both are granted,
+  // because the idle app would otherwise wake 10 times a second for nothing. Wake from sleep, where
+  // taps die silently (#250), recreates the tap through `registerSystemEventObservers` anyway.
   private let trustCheckIntervalNanoseconds: UInt64 = 100_000_000 // 100ms
+  private let grantedTrustCheckIntervalNanoseconds: UInt64 = 2_000_000_000 // 2s
 
   init(
     accessibilityTrustProvider: @escaping @Sendable () -> Bool = {
@@ -304,7 +308,8 @@ class KeyEventMonitorClientLive {
     await handlePermissionChange(accessibility: last.accessibility, input: last.input, reason: "initial")
 
     while !Task.isCancelled {
-      try? await Task.sleep(nanoseconds: trustCheckIntervalNanoseconds)
+      let interval = last.accessibility && last.input ? grantedTrustCheckIntervalNanoseconds : trustCheckIntervalNanoseconds
+      try? await Task.sleep(nanoseconds: interval)
       let current = (
         accessibility: currentAccessibilityTrust(),
         input: currentInputMonitoringTrust()
@@ -390,7 +395,7 @@ class KeyEventMonitorClientLive {
   @MainActor
   private func activateTapIfNeeded(reason: String) {
     if isMonitoring {
-      // The 100ms permission watchdog lands here while healthy; use it to revive taps that
+      // The permission watchdog (every 2 s while healthy) lands here; use it to revive taps that
       // macOS disabled without sending a tapDisabled event (observed after sleep, #250).
       if let eventTapPort, !CGEvent.tapIsEnabled(tap: eventTapPort) {
         CGEvent.tapEnable(tap: eventTapPort, enable: true)

@@ -164,6 +164,17 @@ func run() async throws {
         try await engine.load(warmup: Array(clips[0].samples.prefix(16_000 * 3)))
         print(String(format: "reload + warm-up %.2f s, then %.0f MB", (ContinuousClock.now - reloadStart).seconds, currentFootprintMB()))
     }
+    if let loops = option("--reload-loop").flatMap(Int.init) {
+        // Leak check: load and unload repeatedly, then wait so `heap <pid>` can count what's left.
+        for _ in 0..<loops {
+            engine.unload()
+            try await engine.load(warmup: Array(clips[0].samples.prefix(16_000 * 3)))
+        }
+        engine.unload()
+        print("reload-loop done pid=\(ProcessInfo.processInfo.processIdentifier) footprint \(Int(currentFootprintMB())) MB")
+        fflush(stdout)
+        let end = Date().addingTimeInterval(600); while Date() < end { usleep(200_000) }
+    }
     if let jsonPath {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

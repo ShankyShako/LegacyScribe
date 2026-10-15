@@ -1016,7 +1016,7 @@ actor RecordingClientLive {
     let idleDuration = lastRecordingEndedAt.map { Date().timeIntervalSince($0) }
     let outputDeviceID = getDefaultOutputDevice()
     recordingLogger.notice(
-      "Recording requested mode=\(mode.rawValue) idle=\(self.formatDuration(idleDuration)) input=\(self.describeDevice(inputDeviceID)) output=\(self.describeDevice(outputDeviceID)) fallbackPrimed=\(self.isRecorderPrimedForNextSession)"
+      "Recording requested mode=\(mode.rawValue, privacy: .public) idle=\(self.formatDuration(idleDuration), privacy: .public) input=\(self.describeDevice(inputDeviceID)) output=\(self.describeDevice(outputDeviceID)) fallbackPrimed=\(self.isRecorderPrimedForNextSession)"
     )
   }
 
@@ -1072,7 +1072,7 @@ actor RecordingClientLive {
     captureController.voiceIsolation = wantsVoiceIsolation
     if forceRestart || isolationChanged || captureControllerDeviceID != deviceID {
       recordingLogger.notice(
-        "Restarting capture engine reason=\(reason) previousInput=\(self.describeDevice(self.captureControllerDeviceID)) newInput=\(self.describeDevice(deviceID)) force=\(forceRestart) voiceIsolation=\(wantsVoiceIsolation)"
+        "Restarting capture engine reason=\(reason, privacy: .public) previousInput=\(self.describeDevice(self.captureControllerDeviceID), privacy: .public) newInput=\(self.describeDevice(deviceID), privacy: .public) force=\(forceRestart) voiceIsolation=\(wantsVoiceIsolation)"
       )
       stopCaptureController(reason: forceRestart ? "restart-\(reason)" : "input-device-changed")
     }
@@ -1326,7 +1326,7 @@ actor RecordingClientLive {
         backend: .captureEngine
       )
       recordingLogger.notice(
-        "Recording started mode=\(mode.rawValue) backend=\(RecordingBackend.captureEngine.rawValue) startup=\(self.formatDuration(startedAt.timeIntervalSince(startRequestAt)))"
+        "Recording started mode=\(mode.rawValue, privacy: .public) backend=\(RecordingBackend.captureEngine.rawValue) startup=\(self.formatDuration(startedAt.timeIntervalSince(startRequestAt)), privacy: .public)"
       )
       return
     } catch {

@@ -94,6 +94,8 @@ actor LocalLLM {
       from: try Self.directory(for: model),
       using: TransformersTokenizerLoader()
     )
+    // Building the model draws random keys lazily; unevaluated, the key chain is kept forever.
+    eval(MLXRandom.globalState)
     container = loaded
     loadedRepository = model.repository
     logger.notice("Loaded \(model.repository, privacy: .public) in \(String(describing: ContinuousClock.now - start), privacy: .public)")

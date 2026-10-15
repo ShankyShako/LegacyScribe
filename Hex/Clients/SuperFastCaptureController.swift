@@ -207,11 +207,13 @@ final class SuperFastCaptureController {
   }
 
   private func armEngine(reason: String) throws {
+    let armStartedAt = Date()
     let engine = AVAudioEngine()
     let inputNode = engine.inputNode
     let isolated = voiceIsolation && VoiceIsolation.enable(on: engine)
     // With voice processing the processed voice is channel 0; the channel map below keeps only it.
     let inputFormat = inputNode.inputFormat(forBus: 0)
+    let formatReadAt = Date()
     guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
       throw NSError(
         domain: "SuperFastCapture",
@@ -236,6 +238,7 @@ final class SuperFastCaptureController {
     }
 
     engine.prepare()
+    let preparedAt = Date()
     do {
       try engine.start()
     } catch {
@@ -257,7 +260,7 @@ final class SuperFastCaptureController {
       self?.handleConfigurationChange(generation: generation)
     }
     logger.notice(
-      "Capture engine armed reason=\(reason) sampleRate=\(String(format: "%.0f", inputFormat.sampleRate))Hz channels=\(inputFormat.channelCount) ringBuffer=\(String(format: "%.2f", SuperFastCaptureConstants.ringBufferDuration))s defaultPreRoll=\(String(format: "%.2f", SuperFastCaptureConstants.defaultPreRollDuration))s"
+      "Capture engine armed reason=\(reason, privacy: .public) node+format=\(String(format: "%.3f", formatReadAt.timeIntervalSince(armStartedAt)), privacy: .public)s prepare=\(String(format: "%.3f", preparedAt.timeIntervalSince(formatReadAt)), privacy: .public)s start=\(String(format: "%.3f", Date().timeIntervalSince(preparedAt)), privacy: .public)s sampleRate=\(String(format: "%.0f", inputFormat.sampleRate), privacy: .public)Hz channels=\(inputFormat.channelCount) ringBuffer=\(String(format: "%.2f", SuperFastCaptureConstants.ringBufferDuration))s defaultPreRoll=\(String(format: "%.2f", SuperFastCaptureConstants.defaultPreRollDuration))s"
     )
   }
 
@@ -429,7 +432,7 @@ final class SuperFastCaptureController {
     if !recording.didLogFirstBuffer {
       let timeToFirstBuffer = Date().timeIntervalSince(recording.requestedAt)
       logger.notice(
-        "Capture engine first buffer latency=\(String(format: "%.3f", timeToFirstBuffer))s prepended=\(String(format: "%.3f", recording.prependedDuration))s frames=\(sampleCount)"
+        "Capture engine first buffer latency=\(String(format: "%.3f", timeToFirstBuffer), privacy: .public)s prepended=\(String(format: "%.3f", recording.prependedDuration), privacy: .public)s frames=\(sampleCount)"
       )
       recording.didLogFirstBuffer = true
       activeRecording = recording

@@ -251,6 +251,7 @@
 				47E16A602EC6C9D300885CF7 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				5A1D10012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
 				5A1D20012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				5A1D30012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				5A1D20082F1B000100000001 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 				4F0D6A062F1A000100000001 /* XCRemoteSwiftPackageReference "swift-sharing" */,
 				4F0D6A0A2F1A000100000001 /* XCRemoteSwiftPackageReference "swift-case-paths" */,
@@ -716,6 +717,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.32.3;
+			};
+		};
+		5A1D30012F1B000100000001 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ShankyShako/mlx-swift.git";
+			requirement = {
+				kind = revision;
+				revision = 37407d1ca8c3d138e993d5ef84ac48a13793f0dc;
 			};
 		};
 		5A1D20082F1B000100000001 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {

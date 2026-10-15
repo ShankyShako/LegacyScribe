@@ -18,8 +18,19 @@ class InvisibleWindow: NSPanel {
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 
+  /// The window `fromView` made for the indicator.
+  static weak var shared: InvisibleWindow?
+
+  /// The one part of the window that takes clicks (the Undo pill), in the content view's top-left
+  /// coordinates. The window takes the mouse only while the pointer is over it, so the rest of the
+  /// screen stays click-through.
+  var clickableRect: CGRect? {
+    didSet { updateClickThrough() }
+  }
+
   private var currentScreen: NSScreen?
   private var mouseMonitor: Any?
+  private var localMouseMonitor: Any?
 
   init() {
     let screen = NSScreen.main ?? NSScreen.screens[0]
@@ -61,12 +72,33 @@ class InvisibleWindow: NSPanel {
     // Monitor mouse movements to detect screen boundary crossings
     mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
       self?.checkForScreenChange()
+      self?.updateClickThrough()
     }
+    // While the window takes the mouse, moves come here instead; leaving the pill makes it click-through again.
+    acceptsMouseMovedEvents = true
+    localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+      self?.updateClickThrough()
+      return event
+    }
+  }
+
+  private func updateClickThrough() {
+    guard let rect = clickableRect, !rect.isEmpty else {
+      if !ignoresMouseEvents { ignoresMouseEvents = true }
+      return
+    }
+    // The window covers its screen, so content coordinates are offsets from its top-left corner.
+    let onScreen = CGRect(x: frame.minX + rect.minX, y: frame.maxY - rect.maxY, width: rect.width, height: rect.height)
+    let over = onScreen.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
+    if ignoresMouseEvents == over { ignoresMouseEvents = !over }
   }
 
   deinit {
     NotificationCenter.default.removeObserver(self)
     if let monitor = mouseMonitor {
+      NSEvent.removeMonitor(monitor)
+    }
+    if let monitor = localMouseMonitor {
       NSEvent.removeMonitor(monitor)
     }
   }
@@ -97,8 +129,14 @@ class InvisibleWindow: NSPanel {
 extension InvisibleWindow: NSWindowDelegate {
   static func fromView<V: View>(_ view: V) -> InvisibleWindow {
     let window = InvisibleWindow()
-    window.contentView = NSHostingView(rootView: view)
+    window.contentView = FirstClickHostingView(rootView: view)
     window.delegate = window
+    shared = window
     return window
   }
+}
+
+/// The Undo button must work on the first click, while another app is active.
+private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

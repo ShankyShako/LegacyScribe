@@ -120,6 +120,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var audioRetentionDays: Int
 	/// No network at all (`NetworkPolicy`): only the on-device model rewrites, no update checks or downloads.
 	public var privateMode: Bool
+	/// How long a cancelled dictation's recording is kept for Undo (Esc, or a cancel mid-transcription); 0 deletes it at once.
+	public var cancelUndoSeconds: Int
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -139,7 +141,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		recordingAudioBehavior: RecordingAudioBehavior = .doNothing,
 		minimumKeyTime: Double = HexCoreConstants.defaultMinimumKeyTime,
 		copyToClipboard: Bool = false,
-		superFastModeEnabled: Bool = true,
+		superFastModeEnabled: Bool = false,
 		useDoubleTapOnly: Bool = false,
 		doubleTapLockEnabled: Bool = true,
 		outputLanguage: String? = nil,
@@ -180,7 +182,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		voiceIsolationEnabled: Bool = false,
 		voiceIsolationInNotes: Bool = false,
 		audioRetentionDays: Int = AudioRetention.defaultDays,
-		privateMode: Bool = false
+		privateMode: Bool = false,
+		cancelUndoSeconds: Int = 30
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -235,6 +238,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.voiceIsolationInNotes = voiceIsolationInNotes
 		self.audioRetentionDays = audioRetentionDays
 		self.privateMode = privateMode
+		self.cancelUndoSeconds = cancelUndoSeconds
 		normalizeDoubleTapSettings()
 	}
 
@@ -312,6 +316,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case voiceIsolationInNotes
 	case audioRetentionDays
 	case privateMode
+	case cancelUndoSeconds
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -489,7 +494,8 @@ private enum HexSettingsSchema {
 		SettingsField(.voiceIsolationEnabled, keyPath: \.voiceIsolationEnabled, default: defaults.voiceIsolationEnabled).eraseToAny(),
 		SettingsField(.voiceIsolationInNotes, keyPath: \.voiceIsolationInNotes, default: defaults.voiceIsolationInNotes).eraseToAny(),
 		SettingsField(.audioRetentionDays, keyPath: \.audioRetentionDays, default: defaults.audioRetentionDays).eraseToAny(),
-		SettingsField(.privateMode, keyPath: \.privateMode, default: defaults.privateMode).eraseToAny()
+		SettingsField(.privateMode, keyPath: \.privateMode, default: defaults.privateMode).eraseToAny(),
+		SettingsField(.cancelUndoSeconds, keyPath: \.cancelUndoSeconds, default: defaults.cancelUndoSeconds).eraseToAny()
 	]
 }
 

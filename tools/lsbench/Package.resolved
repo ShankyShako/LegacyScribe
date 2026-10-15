@@ -1,5 +1,5 @@
 {
-  "originHash" : "8d6f5e847e16b242d4559e2230cd9250f071b07b5a27e4a87d3ea303adcde87d",
+  "originHash" : "4a63622ce53359b253f8ee10ae89f02d961405f2a61f9f3489c3f6b0c53ecbee",
   "pins" : [
     {
       "identity" : "combine-schedulers",
@@ -29,6 +29,15 @@
       }
     },
     {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
+      }
+    },
+    {
       "identity" : "mlx-audio-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Blaizzy/mlx-audio-swift.git",
@@ -40,10 +49,9 @@
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift.git",
+      "location" : "https://github.com/ShankyShako/mlx-swift.git",
       "state" : {
-        "revision" : "19601207e9a0de51e03ee6ec0c3c5f3784275075",
-        "version" : "0.32.3"
+        "revision" : "37407d1ca8c3d138e993d5ef84ac48a13793f0dc"
       }
     },
     {

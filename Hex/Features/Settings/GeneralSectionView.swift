@@ -113,15 +113,38 @@ struct GeneralSectionView: View {
 
 			Label {
 				Toggle(
-					"Super Fast Mode",
+					"Keep the microphone ready",
 					isOn: Binding(
 						get: { store.hexSettings.superFastModeEnabled },
 						set: { store.send(.toggleSuperFastMode($0)) }
 					)
 				)
-				Text("Keep the microphone warm and prepend a short in-memory buffer for near-instant capture. macOS will keep showing the microphone indicator while this mode is armed.")
+				Text("Recording starts about 0.2 s sooner and keeps the half second before you press the key. macOS shows the microphone indicator the whole time this is on.")
 			} icon: {
 				Image(systemName: "bolt.circle")
+			}
+
+			Label {
+				HStack {
+					Text("Undo a cancelled dictation")
+					Spacer()
+					Picker("", selection: Binding(
+						get: { store.hexSettings.cancelUndoSeconds },
+						set: { store.send(.setCancelUndoSeconds($0)) }
+					)) {
+						Text("Off").tag(0)
+						Text("10 seconds").tag(10)
+						Text("30 seconds").tag(30)
+						Text("1 minute").tag(60)
+						Text("2 minutes").tag(120)
+					}
+					.pickerStyle(.menu)
+					.frame(width: 120)
+				}
+				Text("After Esc, an Undo button shows under the indicator for this long. The recording is deleted when it goes.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "arrow.uturn.backward")
 			}
 
 			Label {

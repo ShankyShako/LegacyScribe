@@ -173,3 +173,18 @@ P3.5 B1. Twenty samples through `SuperPrompt`: 10 edits of a selection (shorten,
 - Superwhisper's warning that small local models do Super badly doesn't hold for these short tasks, so Settings carries no warning. Longer edits (a page of text) aren't measured yet.
 
 Early detection (the peek Super runs while recording): `say` clips of four dictations, cut at 1.0, 1.7 and 2.5 s and transcribed by Apple Speech (`lsbench --engine apple`, ~70 ms each). "Super, make this shorter…" → "Super." at 1.0 s, "Super, make this shorter." at 1.7 s; "Super. Reply saying…" and "Um, super, fix the grammar…" the same way. "Super excited to join…" → "Super excited." at 1.0 s, so `SuperTrigger.earlyVerdict` never shows Super for it. Synthetic voice only; the user's voice and a slow "super… excited" are still to be tried live.
+
+## MLX memory leak per model load (`lsbench --reload-loop`), 2026-10-14
+
+The Release app sat at 416 MB at rest after ~26 dictations on Cohere 4-bit (loaded per dictation). `heap -s` showed 283k `mlx::core::array::ArrayDesc` plus `Quantize`, `RandomBits`, `Split` and Metal buffers left over: ~7–12 MB per load, never freed.
+
+- mlx-swift 0.32.3 `MLXArray._updateInternal` assigns with `mlx_array_set` (C++ copy assignment), which skips `array::~array()`'s sibling-cycle breaking. `Module.update(parameters:)` uses it to put loaded weights over a fresh `QuantizedLinear`'s random init (unevaluated `Quantize` siblings), so the init graph is orphaned on every load. Affects Cohere and the on-device Qwen rewrite.
+- Model construction also draws ~900 keys from `MLXRandom.globalState` lazily; unevaluated, the key chain grows.
+
+| `lsbench --engine cohere:… --reload-loop N` | `ArrayDesc` after 0 reloads | after 10 |
+|---|---|---|
+| mlx-swift 0.32.3 | 7,785 | 85,445 |
+| fork `056ea0d` + `eval(MLXRandom.globalState)` | 19 | 19 |
+
+Footprint after the wait: 49 → 120 MB unpatched, 32 → 34 MB patched. Transcription speed unchanged (127 ms on a 3.9 s clip).
+

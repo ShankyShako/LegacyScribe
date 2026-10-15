@@ -42,6 +42,7 @@ final class RecordingRaceTests: XCTestCase {
       $0.sourceAppBundleID = activeApp?.bundleIdentifier
       $0.sourceAppName = activeApp?.localizedName
     }
+    await store.receive(\.microphoneReady)
     await store.send(.discard) {
       $0.isRecording = false
       $0.isPrewarming = false
@@ -55,6 +56,7 @@ final class RecordingRaceTests: XCTestCase {
       $0.sourceAppBundleID = activeApp?.bundleIdentifier
       $0.sourceAppName = activeApp?.localizedName
     }
+    await store.receive(\.microphoneReady)
 
     await probe.resumePendingStop()
     await store.finish()
@@ -165,6 +167,7 @@ final class RecordingRaceTests: XCTestCase {
       $0.sourceAppBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
       $0.sourceAppName = NSWorkspace.shared.frontmostApplication?.localizedName
     }
+    await store.receive(\.microphoneReady)
     await store.send(.stopRecording) {
       $0.isRecording = false
     }

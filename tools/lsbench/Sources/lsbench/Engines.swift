@@ -34,6 +34,8 @@ final class CohereMLXEngine: BenchEngine {
     func load(warmup: [Float]) async throws {
         model = try CohereTranscribeModel.fromDirectory(modelDir)
         _ = try await transcribe(warmup)
+        // Building the model draws ~900 random keys lazily; unevaluated, the key chain is kept forever.
+        eval(MLXRandom.globalState)
     }
 
     func transcribe(_ samples: [Float]) async throws -> String {

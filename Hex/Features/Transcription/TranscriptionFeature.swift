@@ -23,6 +23,8 @@ struct TranscriptionFeature {
     var isRecording: Bool = false
     var isTranscribing: Bool = false
     var isPrewarming: Bool = false
+    /// The last dictation hasn't been pasted yet; the talk key is ignored until it is.
+    var isProcessing: Bool { isTranscribing || isRewriting }
     /// The LLM rewrite of the last dictation is in flight (shown like transcribing).
     var isRewriting: Bool = false
     /// Counts dictations whose rewrite failed everywhere and were pasted as recognized; the indicator
@@ -48,6 +50,12 @@ struct TranscriptionFeature {
     var superActive = false
     /// Spelling hints for this dictation, built at key-up.
     var biasing: BiasingContext = .empty
+    /// A cancelled dictation kept for Undo (`HexSettings.cancelUndoSeconds`); its recording goes when this expires.
+    var cancelled: CancelledDictation?
+    /// The cancelled dictation Undo is transcribing again: it's pasted only into the app it was meant for.
+    var undone: CancelledDictation?
+    /// Shared with the effects: the recording being transcribed, and whether a dictation is still processing.
+    var inFlight = DictationInFlight()
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.isNotesRecording) var isNotesRecording: Bool = false
@@ -65,11 +73,20 @@ struct TranscriptionFeature {
 
     // Recording flow
     case startRecording
+    /// The capture engine is running; the speech and rewrite models start loading only now.
+    case microphoneReady
     case stopRecording
 
     // Cancel/discard flow
     case cancel   // Explicit cancellation with sound
     case discard  // Silent discard (too short/accidental)
+    /// A cancel kept the recording; the Undo pill shows until `cancelUndoSeconds` pass.
+    case cancelKept(CancelledDictation)
+    /// The Undo button: the cancelled dictation is transcribed and rewritten as if it hadn't been cancelled.
+    case undoCancel
+    case cancelUndoExpired(UUID)
+    /// Undo finished in another app than the dictation's, so nothing was pasted.
+    case undoNotPasted(DictationNotice)
 
     // Transcription result flow
     case transcriptionResult(String, URL, TimeInterval, DictationTimeline)
@@ -112,6 +129,7 @@ struct TranscriptionFeature {
     case notesMetering
     case notesTimer
     case superPeek
+    case cancelUndo
   }
 
   @Dependency(\.transcription) var transcription
@@ -121,6 +139,7 @@ struct TranscriptionFeature {
   @Dependency(\.soundEffects) var soundEffect
   @Dependency(\.sleepManagement) var sleepManagement
   @Dependency(\.date.now) var now
+  @Dependency(\.continuousClock) var clock
   @Dependency(\.transcriptPersistence) var transcriptPersistence
   @Dependency(\.localLLM) var localLLM
   /// Word fixes and the rewrite chain, shared with History's Retry.
@@ -142,7 +161,7 @@ struct TranscriptionFeature {
         // 3) Priming the recorder for instant startup
         return .merge(
           startMeteringEffect(),
-          startHotKeyMonitoringEffect(),
+          startHotKeyMonitoringEffect(inFlight: state.inFlight),
           startModeCyclerEffect(),
           startSentEditCaptureEffect(),
           startNotesEventsEffect(),
@@ -158,9 +177,13 @@ struct TranscriptionFeature {
       // MARK: - HotKey Flow
 
       case .hotKeyPressed:
-        // If we're transcribing, send a cancel first. Otherwise start recording immediately.
-        // We'll decide later (on release) whether to keep or discard the recording.
-        return handleHotKeyPressed(isTranscribing: state.isTranscribing)
+        // The last dictation finishes first: a stray press right after letting go used to cancel it. Esc
+        // still cancels, with Undo. On release we decide whether to keep or discard the recording.
+        guard !state.isProcessing else {
+          transcriptionFeatureLogger.notice("Talk key pressed while the last dictation is still processing; ignored")
+          return .none
+        }
+        return .send(.startRecording)
 
       case .hotKeyReleased:
         // If we're currently recording, then stop. Otherwise, just cancel
@@ -171,6 +194,9 @@ struct TranscriptionFeature {
 
       case .startRecording:
         return handleStartRecording(&state)
+
+      case .microphoneReady:
+        return handleMicrophoneReady(state)
 
       case .stopRecording:
         return handleStopRecording(&state)
@@ -304,6 +330,46 @@ struct TranscriptionFeature {
           return .none
         }
         return handleDiscard(&state)
+
+      case let .cancelKept(kept):
+        // A newer cancel replaces the offer; the older recording goes.
+        let replaced = state.cancelled
+        state.cancelled = kept
+        let seconds = state.hexSettings.cancelUndoSeconds
+        transcriptionFeatureLogger.notice("Cancelled dictation kept for Undo for \(seconds, privacy: .public) s")
+        return .merge(
+          .run { _ in
+            if let replaced { FileManager.default.removeItemIfExists(at: replaced.audioURL) }
+          },
+          .run { [clock] send in
+            try await clock.sleep(for: .seconds(seconds))
+            await send(.cancelUndoExpired(kept.id))
+          }
+          .cancellable(id: CancelID.cancelUndo, cancelInFlight: true)
+        )
+
+      case let .cancelUndoExpired(id):
+        guard let kept = state.cancelled, kept.id == id else { return .none }
+        state.cancelled = nil
+        return .run { _ in FileManager.default.removeItemIfExists(at: kept.audioURL) }
+
+      case .undoCancel:
+        guard let kept = state.cancelled, !state.isRecording, !state.isProcessing, state.notesRecording == nil else {
+          return .none
+        }
+        state.cancelled = nil
+        return .merge(.cancel(id: CancelID.cancelUndo), handleUndo(&state, kept))
+
+      case let .undoNotPasted(notice):
+        state.showNotice(notice)
+        return .none
+      }
+    }
+    // The hotkey monitor reads this to keep presses away from the processor while a dictation processes.
+    .onChange(of: \.isProcessing) { _, isProcessing in
+      Reduce { state, _ in
+        state.inFlight.isProcessing = isProcessing
+        return .none
       }
     }
   }
@@ -448,7 +514,7 @@ private extension TranscriptionFeature {
   }
 
   /// Effect to start monitoring hotkey events through the `keyEventMonitor`.
-  func startHotKeyMonitoringEffect() -> Effect<Action> {
+  func startHotKeyMonitoringEffect(inFlight: DictationInFlight) -> Effect<Action> {
     .run { send in
       var hotKeyProcessor: HotKeyProcessor = .init(hotkey: HotKey(key: nil, modifiers: [.option]))
       var notesTaps = NotesTapDetector(hotkey: HotKey(key: nil, modifiers: [.option]))
@@ -497,6 +563,13 @@ private extension TranscriptionFeature {
           {
             Task { await send(.cancel) }
             return false
+          }
+
+          // While the last dictation is still processing, a press is ignored (`.hotKeyPressed`). Keeping it
+          // from the processor too stops a stray tap from counting as half of a double-tap lock.
+          if inFlight.isProcessing, hotKeyProcessor.state == .idle {
+            return keyEvent.key != nil && keyEvent.key == hexSettings.hotkey.key
+              && keyEvent.modifiers == hexSettings.hotkey.modifiers
           }
 
 		  // Process the key event
@@ -580,15 +653,6 @@ private extension TranscriptionFeature {
 // MARK: - HotKey Press/Release Handlers
 
 private extension TranscriptionFeature {
-  func handleHotKeyPressed(isTranscribing: Bool) -> Effect<Action> {
-    // If already transcribing, cancel first. Otherwise start recording immediately.
-    guard isTranscribing else { return .send(.startRecording) }
-    return .concatenate(
-      .send(.cancel),
-      .send(.startRecording)
-    )
-  }
-
   func handleHotKeyReleased(isRecording: Bool) -> Effect<Action> {
     // Always stop recording when hotkey is released
     return isRecording ? .send(.stopRecording) : .none
@@ -662,6 +726,56 @@ struct NotesRecording: Equatable {
   var stopRequested = false
 }
 
+/// A dictation cancelled with Esc (while recording or transcribing), kept so Undo can finish it.
+struct CancelledDictation: Equatable, Sendable {
+  /// Shorter recordings aren't offered: a cancel that quick was meant.
+  static let minimumDuration: TimeInterval = 1
+
+  var id = UUID()
+  var audioURL: URL
+  var duration: TimeInterval
+  var sourceAppBundleID: String?
+  var sourceAppName: String?
+  var biasing: BiasingContext
+}
+
+/// What the reducer shares with long-running effects. The transcription holds its recording here until
+/// it hands the result on; a cancel takes it first, so the transcription doesn't delete it. The hotkey
+/// monitor reads `isProcessing`. A reference, so the copy in `State` and the effects' copies are the same.
+final class DictationInFlight: Equatable, @unchecked Sendable {
+  private let lock = NSLock()
+  private var audio: (url: URL, duration: TimeInterval)?
+  private var processing = false
+
+  var isProcessing: Bool {
+    get { lock.withLock { processing } }
+    set { lock.withLock { processing = newValue } }
+  }
+
+  func holdAudio(_ url: URL, duration: TimeInterval) {
+    lock.withLock { audio = (url, duration) }
+  }
+
+  /// Ends the hold. False when a cancel took the recording (it's no longer the holder's to delete).
+  func releaseAudio(_ url: URL) -> Bool {
+    lock.withLock {
+      guard audio?.url == url else { return false }
+      audio = nil
+      return true
+    }
+  }
+
+  /// Takes the recording away from the transcription.
+  func takeAudio() -> (url: URL, duration: TimeInterval)? {
+    lock.withLock {
+      defer { audio = nil }
+      return audio
+    }
+  }
+
+  static func == (lhs: DictationInFlight, rhs: DictationInFlight) -> Bool { lhs === rhs }
+}
+
 struct NoticeRequest: Equatable {
   var notice: DictationNotice
   var serial: Int
@@ -707,10 +821,6 @@ private extension TranscriptionFeature {
     // Prevent system sleep during recording
     return .merge(
       .cancel(id: CancelID.recordingCleanup),
-      // An idle-unloaded model loads again while the user speaks (~0.4 s for Cohere).
-      .run { [transcription, model = state.hexSettings.selectedModel] _ in
-        await transcription.prewarm(model)
-      },
       // The text around the cursor, read before focus can move: its names become spelling hints, and a
       // Legacy dictation edits the selection.
       .run { [focusedText, enabled = state.hexSettings.contextTermsEnabled || state.hexSettings.superEnabled] send in
@@ -724,19 +834,15 @@ private extension TranscriptionFeature {
         for offset in SuperTrigger.peekSeconds {
           try await Task.sleep(until: started + .seconds(offset), clock: .continuous)
           let head = await recording.recordingHead()
-          guard !head.isEmpty, let text = await speechPeek.transcribe(head) else { continue }
+          guard !head.isEmpty else { continue }
+          guard let text = await speechPeek.transcribe(head) else { return }
           let verdict = SuperTrigger.earlyVerdict(text)
           if let isSuper = verdict.isSuper { await send(.superHeard(isSuper)) }
           if verdict.isSettled { return }
         }
       }
       .cancellable(id: CancelID.superPeek, cancelInFlight: true),
-      // The on-device rewrite model loads while the user speaks too.
-      .run { [localLLM, settings = state.hexSettings] _ in
-        guard settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return }
-        await localLLM.prewarm(settings.rewritePrimary.model)
-      },
-      .run { [sleepManagement, preventSleep = state.hexSettings.preventSystemSleep] _ in
+      .run { [sleepManagement, preventSleep = state.hexSettings.preventSystemSleep] send in
         // Play sound immediately for instant feedback
         soundEffect.play(.startRecording)
 
@@ -750,8 +856,24 @@ private extension TranscriptionFeature {
           return
         }
         await recording.startRecording()
+        await send(.microphoneReady)
       }
       .cancellable(id: CancelID.recordingStart, cancelInFlight: true)
+    )
+  }
+
+  /// Model loads wait for the microphone so they can't slow down arming it; they still have the whole
+  /// dictation to finish (~0.4–1.3 s for Cohere), and a dictation that ends first loads the model itself.
+  func handleMicrophoneReady(_ state: State) -> Effect<Action> {
+    guard state.isRecording else { return .none }
+    return .merge(
+      .run { [transcription, model = state.hexSettings.selectedModel] _ in
+        await transcription.prewarm(model)
+      },
+      .run { [localLLM, settings = state.hexSettings] _ in
+        guard settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return }
+        await localLLM.prewarm(settings.rewritePrimary.model)
+      }
     )
   }
 
@@ -801,14 +923,9 @@ private extension TranscriptionFeature {
       )
     }
 
-    @Shared(.sentEdits) var sentEdits: SentEditLog
     let field = state.hexSettings.contextTermsEnabled ? state.fieldContext : nil
     state.superField = state.hexSettings.superEnabled ? state.fieldContext : nil
-    state.biasing = BiasingContext.build(
-      vocabulary: state.hexSettings.vocabulary,
-      sentEdits: sentEdits.edits,
-      field: field.map { (text: $0.value, cursor: $0.cursor) }
-    )
+    state.biasing = biasingContext(field: field, settings: state.hexSettings)
     state.fieldContext = nil
     if !state.biasing.isEmpty {
       let (vocabulary, fixed, nearby) = (state.biasing.vocabulary.count, state.biasing.corrections.count, state.biasing.nearby.count)
@@ -818,28 +935,58 @@ private extension TranscriptionFeature {
     // Otherwise, proceed to transcription
     state.isTranscribing = true
     state.error = nil
-    let language = state.hexSettings.outputLanguage
-
     state.isPrewarming = true
 
     return .merge(
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
-      .run { [sleepManagement] send in
+      transcribeEffect(
+        recording: nil, duration: duration, keyUp: keyUp,
+        model: model, language: state.hexSettings.outputLanguage, inFlight: state.inFlight
+      )
+    )
+  }
+
+  /// The vocabulary, spellings fixed in sent text, and names near the cursor (`field`) for one dictation.
+  func biasingContext(field: FocusedText?, settings: HexSettings) -> BiasingContext {
+    @Shared(.sentEdits) var sentEdits: SentEditLog
+    return BiasingContext.build(
+      vocabulary: settings.vocabulary,
+      sentEdits: sentEdits.edits,
+      field: field.map { (text: $0.value, cursor: $0.cursor) }
+    )
+  }
+
+  /// Transcribes a dictation and sends `.transcriptionResult`. With `recording` nil the microphone is stopped
+  /// and its capture used; Undo passes the recording a cancel kept. While this runs the recording is held in
+  /// `inFlight`: a cancel takes it from there for Undo, and whatever nobody took is deleted at the end.
+  func transcribeEffect(
+    recording kept: URL?,
+    duration: TimeInterval,
+    keyUp: ContinuousClock.Instant,
+    model: String,
+    language: String?,
+    inFlight: DictationInFlight
+  ) -> Effect<Action> {
+    .run { [sleepManagement] send in
+      if kept == nil {
         // Allow system to sleep again
         await sleepManagement.allowSleep()
+      }
 
-        var timeline = DictationTimeline(keyUp: keyUp)
-        var audioURL: URL?
-        defer {
-          if let audioURL {
-            FileManager.default.removeItemIfExists(at: audioURL)
-          }
+      var timeline = DictationTimeline(keyUp: keyUp)
+      var audioURL: URL?
+      defer {
+        if let audioURL, inFlight.releaseAudio(audioURL) {
+          FileManager.default.removeItemIfExists(at: audioURL)
         }
-        do {
-          let stopResult = await recording.stopRecording()
-          let capturedURL: URL
-          switch stopResult {
+      }
+      do {
+        let capturedURL: URL
+        if let kept {
+          capturedURL = kept
+        } else {
+          switch await recording.stopRecording() {
           case let .captured(url):
             capturedURL = url
           case .ignored(.staleSession):
@@ -854,37 +1001,59 @@ private extension TranscriptionFeature {
             await send(.transcriptionError(error, nil))
             return
           }
-          audioURL = capturedURL
-          timeline.captureStopped = stampLatency("captureStopped")
-          guard !Task.isCancelled else { return }
+        }
+        audioURL = capturedURL
+        inFlight.holdAudio(capturedURL, duration: duration)
+        timeline.captureStopped = stampLatency("captureStopped")
+        guard !Task.isCancelled else { return }
+        if kept == nil {
           soundEffect.play(.stopRecording)
+        }
 
-          // Create transcription options with the selected language
-          // Note: cap concurrency to avoid audio I/O overloads on some Macs
-          let decodeOptions = DecodingOptions(
-            language: language,
-            detectLanguage: language == nil, // Only auto-detect if no language specified
-            chunkingStrategy: .vad,
-          )
+        // Create transcription options with the selected language
+        // Note: cap concurrency to avoid audio I/O overloads on some Macs
+        let decodeOptions = DecodingOptions(
+          language: language,
+          detectLanguage: language == nil, // Only auto-detect if no language specified
+          chunkingStrategy: .vad,
+        )
 
-          let result = try await transcription.transcribe(capturedURL, model, decodeOptions) { _ in }
-          timeline.transcribed = stampLatency("transcribed")
+        let result = try await transcription.transcribe(capturedURL, model, decodeOptions) { _ in }
+        timeline.transcribed = stampLatency("transcribed")
 
-          transcriptionFeatureLogger.notice("Transcribed audio from \(capturedURL.lastPathComponent) to text length \(result.count)")
+        transcriptionFeatureLogger.notice("Transcribed audio from \(capturedURL.lastPathComponent) to text length \(result.count)")
+        audioURL = nil
+        // A cancel that came during the transcription took the recording for Undo.
+        guard inFlight.releaseAudio(capturedURL) else { return }
+        await send(.transcriptionResult(result, capturedURL, duration, timeline))
+      } catch {
+        transcriptionFeatureLogger.error("Transcription failed: \(error.localizedDescription)")
+        // Esc cancels the dictation (its recording is kept for Undo); any other failure keeps it for Retry.
+        if !Task.isCancelled, !(error is CancellationError), let failed = audioURL, inFlight.releaseAudio(failed) {
           audioURL = nil
-          await send(.transcriptionResult(result, capturedURL, duration, timeline))
-        } catch {
-          transcriptionFeatureLogger.error("Transcription failed: \(error.localizedDescription)")
-          // Esc cancels the dictation and its recording; any other failure keeps the recording for Retry.
-          if !Task.isCancelled, !(error is CancellationError), let kept = audioURL {
-            audioURL = nil
-            await send(.transcriptionFailed(error, kept, duration))
-          } else {
-            await send(.transcriptionError(error, nil))
-          }
+          await send(.transcriptionFailed(error, failed, duration))
+        } else {
+          await send(.transcriptionError(error, nil))
         }
       }
-      .cancellable(id: CancelID.transcription)
+    }
+    .cancellable(id: CancelID.transcription)
+  }
+
+  /// Undo: the cancelled dictation goes through transcription and the rewrite again, for the app it was
+  /// dictated into. Context read at key-down (a Legacy selection, a merge) isn't restored.
+  func handleUndo(_ state: inout State, _ kept: CancelledDictation) -> Effect<Action> {
+    state.isTranscribing = true
+    state.error = nil
+    state.sourceAppBundleID = kept.sourceAppBundleID
+    state.sourceAppName = kept.sourceAppName
+    state.biasing = kept.biasing
+    state.superField = nil
+    state.undone = kept
+    transcriptionFeatureLogger.notice("Undo: transcribing the cancelled dictation again")
+    return transcribeEffect(
+      recording: kept.audioURL, duration: kept.duration, keyUp: stampLatency("keyUp"),
+      model: state.hexSettings.selectedModel, language: state.hexSettings.outputLanguage, inFlight: state.inFlight
     )
   }
 }
@@ -903,6 +1072,8 @@ private extension TranscriptionFeature {
     state.isPrewarming = false
     // The early look ends here; a Legacy transcript turns it back on below.
     state.superActive = false
+    let isUndo = state.undone != nil
+    state.undone = nil
 
     // Check for force quit command (emergency escape hatch)
     if ForceQuitCommandDetector.matches(result) {
@@ -929,7 +1100,7 @@ private extension TranscriptionFeature {
        let instruction = SuperTrigger.instruction(in: result) {
       return handleSuper(
         &state, instruction: instruction, recognized: result, field: superField,
-        audioURL: audioURL, duration: duration, timeline: timeline
+        audioURL: audioURL, duration: duration, timeline: timeline, isUndo: isUndo
       )
     }
     let settings = state.hexSettings
@@ -1030,6 +1201,7 @@ private extension TranscriptionFeature {
         return
       }
 
+      let paste = undoMayPaste(isUndo, into: sourceAppBundleID)
       do {
         try await finalizeRecordingAndStoreTranscript(
           result: output,
@@ -1047,13 +1219,30 @@ private extension TranscriptionFeature {
           audioURL: audioURL,
           transcriptionHistory: transcriptionHistory,
           timeline: timeline,
-          engine: engine
+          engine: engine,
+          paste: paste,
+          watchSent: paste
         )
+        if !paste { await send(.undoNotPasted(await keepUnpasted(output, appName: sourceAppName, settings: settings))) }
       } catch {
         await send(.transcriptionError(error, audioURL))
       }
     }
     .cancellable(id: CancelID.transcription)
+  }
+
+  /// Undo comes after the user may have moved on, so it pastes only while the dictation's app is in front.
+  func undoMayPaste(_ isUndo: Bool, into bundleID: String?) -> Bool {
+    guard isUndo else { return true }
+    let front = focusedText.frontmostBundleID()
+    return front != nil && front == bundleID
+  }
+
+  /// An Undo that couldn't paste: the text is in History, or on the clipboard when History is off.
+  func keepUnpasted(_ text: String, appName: String?, settings: HexSettings) async -> DictationNotice {
+    if settings.saveTranscriptionHistory { return .undoSaved(appName) }
+    await pasteboard.copy(text)
+    return .undoCopied(appName)
   }
 
   /// A dictation that started with "legacy": the rest is an instruction that edits the text selected at
@@ -1066,7 +1255,8 @@ private extension TranscriptionFeature {
     field: FocusedText?,
     audioURL: URL,
     duration: TimeInterval,
-    timeline: DictationTimeline
+    timeline: DictationTimeline,
+    isUndo: Bool = false
   ) -> Effect<Action> {
     guard !instruction.isEmpty else {
       transcriptionFeatureLogger.notice("Legacy heard with no instruction after it; nothing to do")
@@ -1134,6 +1324,7 @@ private extension TranscriptionFeature {
       if let failure {
         await pasteboard.copy(recognized)
       }
+      let paste = failure == nil && undoMayPaste(isUndo, into: sourceAppBundleID)
       do {
         try await finalizeRecordingAndStoreTranscript(
           result: failure == nil ? outcome?.text ?? recognized : recognized,
@@ -1152,10 +1343,13 @@ private extension TranscriptionFeature {
           transcriptionHistory: transcriptionHistory,
           timeline: timeline,
           engine: engine,
-          paste: failure == nil,
+          paste: paste,
           // The answer isn't what the speaker said, so what's sent after it isn't a correction of it.
           watchSent: false
         )
+        if failure == nil, !paste, let text = outcome?.text {
+          await send(.undoNotPasted(await keepUnpasted(text, appName: sourceAppName, settings: settings)))
+        }
       } catch {
         await send(.transcriptionError(error, audioURL))
       }
@@ -1436,6 +1630,27 @@ private extension TranscriptionFeature {
 private extension TranscriptionFeature {
   func handleCancel(_ state: inout State) -> Effect<Action> {
     let wasRecording = state.isRecording
+    // Undo needs the app the dictation was for and its spelling hints; a recording too short to be a
+    // dictation isn't worth an offer.
+    let undoSeconds = state.hexSettings.cancelUndoSeconds
+    let field = state.hexSettings.contextTermsEnabled ? state.fieldContext : nil
+    let biasing = wasRecording ? biasingContext(field: field, settings: state.hexSettings) : state.biasing
+    let (bundleID, appName) = (state.sourceAppBundleID, state.sourceAppName)
+    let keepForUndo: @Sendable (URL, TimeInterval) -> CancelledDictation? = { url, duration in
+      guard undoSeconds > 0, duration >= CancelledDictation.minimumDuration else { return nil }
+      return CancelledDictation(
+        audioURL: url, duration: duration, sourceAppBundleID: bundleID, sourceAppName: appName, biasing: biasing
+      )
+    }
+    let recordedFor = state.recordingStartTime.map { now.timeIntervalSince($0) } ?? 0
+    // Cancelled mid-transcription: the recording is taken from the transcription so it isn't deleted.
+    var keptWhileTranscribing: CancelledDictation?
+    var dropped: URL?
+    if !wasRecording, let audio = state.inFlight.takeAudio() {
+      keptWhileTranscribing = keepForUndo(audio.url, audio.duration)
+      if keptWhileTranscribing == nil { dropped = audio.url }
+    }
+    state.undone = nil
     state.isTranscribing = false
     state.isRecording = false
     state.isPrewarming = false
@@ -1447,24 +1662,30 @@ private extension TranscriptionFeature {
       .cancel(id: CancelID.transcription),
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
-      .run { [sleepManagement, localLLM] _ in
+      .run { [sleepManagement, localLLM] send in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
         // The rewrite model warmed at key-down isn't needed now.
         await localLLM.unload()
+        if let dropped { FileManager.default.removeItemIfExists(at: dropped) }
         guard wasRecording else {
           soundEffect.play(.cancel)
           return
         }
-        // Stop the recording to release microphone access
-		let result = await recording.stopRecording()
-		if case let .captured(url) = result {
-		  FileManager.default.removeItemIfExists(at: url)
-		}
-		guard !Task.isCancelled else { return }
-		soundEffect.play(.cancel)
+        // Stop the recording to release microphone access; it's kept for Undo unless a new one already started.
+        let result = await recording.stopRecording()
+        if case let .captured(url) = result {
+          if !Task.isCancelled, let kept = keepForUndo(url, recordedFor) {
+            await send(.cancelKept(kept))
+          } else {
+            FileManager.default.removeItemIfExists(at: url)
+          }
+        }
+        guard !Task.isCancelled else { return }
+        soundEffect.play(.cancel)
       }
-      .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true)
+      .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true),
+      keptWhileTranscribing.map { .send(.cancelKept($0)) } ?? .none
     )
   }
 
@@ -1528,6 +1749,8 @@ struct TranscriptionView: View {
     if let notice { return notice }
     if store.superActive { return .superOn }
     if let notes = store.notesRecording { return .notesRecording(since: notes.startedAt) }
+    // Undo waits out a new dictation and comes back after it.
+    if store.cancelled != nil, !store.isRecording, !store.isProcessing { return .cancelled }
     let mode = store.hexSettings.rewriteMode
     guard store.isRecording else { return nil }
     if store.hexSettings.privateMode { return .recordingPrivate(mode) }
@@ -1546,7 +1769,20 @@ struct TranscriptionView: View {
           ModeCyclerBarView(highlight: cyclerHighlight)
             .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
         } else if let visibleNotice {
-          DictationNoticeView(notice: visibleNotice)
+          DictationNoticeView(notice: visibleNotice, onUndo: { store.send(.undoCancel) })
+            .background {
+              // The window is click-through except over the Undo pill.
+              if visibleNotice == .cancelled {
+                GeometryReader { proxy in
+                  Color.clear
+                    .onAppear { InvisibleWindow.shared?.clickableRect = proxy.frame(in: .global) }
+                    .onChange(of: proxy.frame(in: .global)) { _, frame in
+                      InvisibleWindow.shared?.clickableRect = frame
+                    }
+                    .onDisappear { InvisibleWindow.shared?.clickableRect = nil }
+                }
+              }
+            }
             .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
         }
       }

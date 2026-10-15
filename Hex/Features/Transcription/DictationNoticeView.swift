@@ -29,6 +29,12 @@ enum DictationNotice: Equatable {
   case superFailed(String)
   /// Text was selected at key-down without "legacy" (shown `SuperTrigger.hintLimit` times).
   case superHint
+  /// A dictation was cancelled and its recording kept; the pill has an Undo button.
+  case cancelled
+  /// Undo finished after the user left the dictation's app (named), so it went to History instead.
+  case undoSaved(String?)
+  /// Same, with History off: the text was copied.
+  case undoCopied(String?)
 
   var systemImage: String {
     switch self {
@@ -40,6 +46,9 @@ enum DictationNotice: Equatable {
     case .notesStoppedSilent: "waveform.slash"
     case .rewriteFellBack, .dictationKept, .notesProblem, .superFailed: "exclamationmark.triangle.fill"
     case .superOn, .superHint: "sparkle"
+    case .cancelled: "arrow.uturn.backward"
+    case .undoSaved: "tray.and.arrow.down"
+    case .undoCopied: "doc.on.clipboard"
     }
   }
 
@@ -58,13 +67,16 @@ enum DictationNotice: Equatable {
     case .superOn: "Legacy"
     case let .superFailed(message): message
     case .superHint: "Say \u{201C}legacy\u{201D} first to edit this"
+    case .cancelled: "Dictation cancelled"
+    case let .undoSaved(app): "Not pasted\(app.map { " (you left \($0))" } ?? ""): saved in History"
+    case let .undoCopied(app): "Not pasted\(app.map { " (you left \($0))" } ?? ""): copied"
     }
   }
 
   var detail: String? {
     switch self {
     case let .modeChanged(mode): mode.shortcutDescription
-    case .rewriteFellBack, .dictationKept, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .notesProblem, .superOn, .superFailed, .superHint: nil
+    case .rewriteFellBack, .dictationKept, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .notesProblem, .superOn, .superFailed, .superHint, .cancelled, .undoSaved, .undoCopied: nil
     }
   }
 
@@ -76,7 +88,7 @@ enum DictationNotice: Equatable {
   var tint: Color {
     switch self {
     case .rewriteFellBack, .dictationKept, .notesProblem, .superFailed: .orange
-    case .modeChanged, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .superOn, .superHint: .white
+    case .modeChanged, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .superOn, .superHint, .cancelled, .undoSaved, .undoCopied: .white
     }
   }
 
@@ -85,8 +97,9 @@ enum DictationNotice: Equatable {
     switch self {
     case .modeChanged: .milliseconds(1100)
     case .rewriteFellBack, .notesSaved, .superHint: .milliseconds(2600)
-    case .dictationKept, .notesEnding, .notesStoppedSilent, .notesProblem, .superFailed: .seconds(4)
-    case .recordingIn, .recordingPrivate, .notesRecording, .superOn: nil
+    case .dictationKept, .notesEnding, .notesStoppedSilent, .notesProblem, .superFailed, .undoSaved, .undoCopied: .seconds(4)
+    // Undo stays until the offer ends (`HexSettings.cancelUndoSeconds`).
+    case .recordingIn, .recordingPrivate, .notesRecording, .superOn, .cancelled: nil
     }
   }
 }
@@ -96,6 +109,8 @@ enum DictationNotice: Equatable {
 /// replaying the entrance, so pressing ⌃⌥1, ⌃⌥2, ⌃⌥3 in a row doesn't flicker.
 struct DictationNoticeView: View {
   var notice: DictationNotice
+  /// The Undo button's action, for `.cancelled`.
+  var onUndo: (() -> Void)?
 
   var body: some View {
     HStack(spacing: 6) {
@@ -115,13 +130,26 @@ struct DictationNoticeView: View {
           .font(.system(size: 11, weight: .regular).monospacedDigit())
           .foregroundStyle(.white.opacity(0.55))
       }
+      if notice == .cancelled, let onUndo {
+        Button(action: onUndo) {
+          Text("Undo")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.white))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Undo: bring back the cancelled dictation")
+      }
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 5)
     .background(Capsule().fill(Color.black.opacity(0.8)))
     .overlay(Capsule().strokeBorder(notice.tint.opacity(notice.tint == .white ? 0.12 : 0.5), lineWidth: 1))
     .fixedSize()
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: notice == .cancelled ? .contain : .combine)
   }
 
   static let entrance = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.18)

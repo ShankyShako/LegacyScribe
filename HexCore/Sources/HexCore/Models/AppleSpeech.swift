@@ -17,7 +17,10 @@ public enum AppleSpeech {
 	}
 
 	public static func isInstalled() async -> Bool {
-		await AssetInventory.status(forModules: [makeTranscriber()]) == .installed
+		// Not `AssetInventory.status`: it said `.supported` (and asked for an install) on a Mac whose en-US model
+		// transcribed fine, so Legacy's early look never ran (2026-10-14).
+		let wanted = locale.identifier(.bcp47)
+		return await SpeechTranscriber.installedLocales.contains { $0.identifier(.bcp47) == wanted }
 	}
 
 	/// Downloads the English model if macOS doesn't have it yet; `progress` goes from 0 to 1.

@@ -53,6 +53,8 @@ actor CohereClient {
     let loaded = try CohereTranscribeModel.fromDirectory(directory)
     // First inference compiles Metal kernels; do it now so the first dictation isn't slow.
     _ = loaded.generate(audio: MLXArray([Float](repeating: 0, count: 16_000)), generationParameters: Self.parameters)
+    // Building the model draws ~900 random keys lazily; unevaluated, the key chain is kept forever.
+    eval(MLXRandom.globalState)
     model = loaded
     currentVariant = variant
     overall.completedUnitCount = 100

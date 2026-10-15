@@ -46,6 +46,8 @@ struct FocusedText: Equatable, Sendable {
 @DependencyClient
 struct FocusedTextClient {
 	var read: @Sendable () -> FocusedText? = { nil }
+	/// The app in front now (Undo pastes only into the app a dictation was for).
+	var frontmostBundleID: @Sendable () -> String? = { nil }
 }
 
 extension FocusedTextClient: DependencyKey {
@@ -92,10 +94,12 @@ extension FocusedTextClient: DependencyKey {
 				cursor: hasRange ? range.location : nil,
 				selectionLength: hasRange ? range.length : 0
 			)
+		}, frontmostBundleID: {
+			NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 		})
 	}
 
-	static var testValue: Self { Self(read: { nil }) }
+	static var testValue: Self { Self(read: { nil }, frontmostBundleID: { nil }) }
 }
 
 extension DependencyValues {

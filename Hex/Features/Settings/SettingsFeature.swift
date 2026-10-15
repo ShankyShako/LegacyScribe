@@ -127,6 +127,7 @@ struct SettingsFeature {
     case toggleSaveTranscriptionHistory(Bool)
     case setMaxHistoryEntries(Int?)
     case setAudioRetentionDays(Int)
+    case setCancelUndoSeconds(Int)
     case setPrivateMode(Bool)
 
     // Modifier configuration
@@ -882,6 +883,10 @@ struct SettingsFeature {
 
       case let .setPrivateMode(isOn):
         state.$hexSettings.withLock { $0.privateMode = isOn }
+        return .none
+
+      case let .setCancelUndoSeconds(seconds):
+        state.$hexSettings.withLock { $0.cancelUndoSeconds = seconds }
         return .none
 
       case let .setAudioRetentionDays(days):

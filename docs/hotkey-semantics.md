@@ -310,6 +310,16 @@ Tests: `NotesTapDetectorTests` in `HexCore/Tests/HexCoreTests/NotesTests.swift`.
 
 ---
 
+## While the Last Dictation Processes
+
+From key-up until the text is pasted (transcription, then the rewrite), a press of the talk key is ignored: it doesn't cancel that dictation and doesn't start a new one. The press isn't fed to `HotKeyProcessor` either, so a stray tap can't count as half of a double-tap lock. Esc still cancels.
+
+Before 2026-10-14 such a press cancelled the dictation being transcribed and started a new recording, which was usually too short and discarded: a hand brushing the key just after letting go lost the whole dictation.
+
+## Cancel and Undo
+
+Esc cancels a recording or a transcription with the cancel sound, as before. If the recording is at least 1 s long and `cancelUndoSeconds` isn't 0 (Settings > General, "Undo a cancelled dictation", default 30 s), it is kept and a "Dictation cancelled · Undo" pill shows under the indicator. The pill hides while another dictation records or processes and comes back after it. Undo transcribes and rewrites it as if it hadn't been cancelled, and pastes only if the app it was dictated into is still in front; otherwise it goes to History (or the clipboard when History is off) with a "Not pasted" notice. When the time runs out, or another cancel replaces it, the recording is deleted. Silent discards (presses under the threshold) are not kept.
+
 ## Output Types
 
 - **`.discard`** (silent)
