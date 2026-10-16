@@ -193,6 +193,12 @@ do {
         try await runVadBench(Array(CommandLine.arguments.dropFirst(2)))
     } else if CommandLine.arguments.dropFirst().first == "align" {
         try await runAlignBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "coach" {
+        try await runCoachBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "voice" {
+        try await runVoiceBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "words" {
+        try await runWordsBench(Array(CommandLine.arguments.dropFirst(2)))
     } else {
         try await run()
     }

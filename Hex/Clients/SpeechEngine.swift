@@ -70,7 +70,7 @@ struct CohereEngine: SpeechEngine {
 
 	func transcribe(_ audio: URL, model: String) async throws -> String {
 		try await prepare(model) { _ in }
-		return try await client.transcribe(audio, modelName: model)
+		return try await client.transcribeSpeech(audio, modelName: model)
 	}
 
 	func delete(_ model: String) async throws {

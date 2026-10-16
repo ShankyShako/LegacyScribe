@@ -38,6 +38,9 @@ struct TranscriptionFeature {
     var notice: NoticeRequest?
     var error: String?
     var recordingStartTime: Date?
+    /// A dictation pressed in Notes mode that outlasted the tap window (`NotesTapDetector.tapWindow`): it is
+    /// dictated in `HexSettings.dictationMode`, and the pill says so.
+    var notesHold = false
     var meter: Meter = .init(averagePower: 0, peakPower: 0)
     var sourceAppBundleID: String?
     var sourceAppName: String?
@@ -109,6 +112,10 @@ struct TranscriptionFeature {
 
     // Notes sessions
     case notesTapped
+    /// A press in Notes mode held past the tap window: it's a dictation, not a session.
+    case notesHoldConfirmed
+    /// A finished session in which nothing was heard was deleted.
+    case notesDiscardedSilent
     case notesStarted(String)
     case notesStartFailed(String)
     case notesStop
@@ -130,6 +137,7 @@ struct TranscriptionFeature {
     case notesTimer
     case superPeek
     case cancelUndo
+    case notesHold
   }
 
   @Dependency(\.transcription) var transcription
@@ -232,7 +240,7 @@ struct TranscriptionFeature {
         transcriptionFeatureLogger.info("Legacy \(isSuper ? "heard" : "not heard", privacy: .public) early")
         let settings = state.hexSettings
         // Raw mode doesn't warm the on-device model at key-down; Legacy needs it.
-        guard isSuper, !settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return .none }
+        guard isSuper, !settings.dictationMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return .none }
         return .run { [localLLM] _ in await localLLM.prewarm(settings.rewritePrimary.model) }
 
       case let .superFinished(notice):
@@ -268,8 +276,19 @@ struct TranscriptionFeature {
           guard now.timeIntervalSince(session.startedAt) > 0.6 else { return .none }
           return handleNotesStop(&state)
         }
-        guard !state.isRecording else { return .none }
-        return handleNotesStart(&state)
+        // The tap's own press started a dictation (Notes mode holds dictate); the session replaces it.
+        guard state.isRecording else { return handleNotesStart(&state) }
+        let discard = handleDiscard(&state)
+        return .merge(discard, handleNotesStart(&state))
+
+      case .notesHoldConfirmed:
+        guard state.isRecording else { return .none }
+        state.notesHold = true
+        return .run { _ in soundEffect.play(.startRecording) }
+
+      case .notesDiscardedSilent:
+        state.showNotice(.notesDiscarded(silent: true))
+        return .none
 
       case let .notesStarted(id):
         state.notesRecording?.id = id
@@ -314,9 +333,9 @@ struct TranscriptionFeature {
       // MARK: - Cancel/Discard Flow
 
       case .cancel:
-        // Esc ends a notes session and keeps it.
+        // Esc ends a notes session and keeps it, unless it's in its first seconds.
         if state.notesRecording != nil {
-          return handleNotesStop(&state)
+          return handleNotesStop(&state, discardingUnder: NotesSession.escapeDiscardSeconds)
         }
         // Only cancel if we're in the middle of recording, transcribing, or post-processing
         guard state.isRecording || state.isTranscribing else {
@@ -518,6 +537,7 @@ private extension TranscriptionFeature {
     .run { send in
       var hotKeyProcessor: HotKeyProcessor = .init(hotkey: HotKey(key: nil, modifiers: [.option]))
       var notesTaps = NotesTapDetector(hotkey: HotKey(key: nil, modifiers: [.option]))
+      var notesPressBeganIdle = false
       @Shared(.isSettingHotKey) var isSettingHotKey: Bool
       @Shared(.hexSettings) var hexSettings: HexSettings
       @Shared(.isNotesRecording) var isNotesRecording: Bool
@@ -537,22 +557,33 @@ private extension TranscriptionFeature {
         hotKeyProcessor.minimumKeyTime = hexSettings.minimumKeyTime
         notesTaps.hotkey = hexSettings.hotkey
 
-        // Notes mode: a clean tap starts a session and the next one stops it (docs/hotkey-semantics.md).
-        // A dictation already under way (the mode picked mid-dictation) stays with the processor.
-        let notesRecording = isNotesRecording
-        let notesModeIdle = hexSettings.rewriteMode == .notes && hotKeyProcessor.state == .idle
-        if case let .keyboard(keyEvent) = inputEvent, notesRecording || notesModeIdle {
+        // Notes mode (docs/hotkey-semantics.md): while a session records, any clean press stops it. Otherwise
+        // a quick clean tap starts one, and every other press is an ordinary dictation: the processor gets
+        // the same events, so a hold records from key-down.
+        if case let .keyboard(keyEvent) = inputEvent, isNotesRecording || hexSettings.rewriteMode == .notes {
           let wasHeld = notesTaps.isHeld
-          switch notesTaps.process(keyEvent) {
-          case .tapped:
-            Task { await send(.notesTapped) }
-          case .escape:
-            Task { await send(.cancel) }
-          case nil:
-            break
-          }
+          if !wasHeld { notesPressBeganIdle = hotKeyProcessor.state == .idle }
+          let output = notesTaps.process(keyEvent)
           // A key hotkey's own key is swallowed, as it is for dictation.
-          return keyEvent.key != nil && keyEvent.key == hexSettings.hotkey.key && (wasHeld || notesTaps.isHeld)
+          let swallow = keyEvent.key != nil && keyEvent.key == hexSettings.hotkey.key && (wasHeld || notesTaps.isHeld)
+          if isNotesRecording {
+            switch output {
+            case .tapped, .released:
+              Task { await send(.notesTapped) }
+            case .escape:
+              Task { await send(.cancel) }
+            case nil:
+              break
+            }
+            return swallow
+          }
+          // Only a press that began with nothing recording: the press that stops a locked dictation isn't a tap.
+          if output == .tapped, notesPressBeganIdle {
+            // The recording this press started is dropped; the processor forgets the press (no lock later).
+            hotKeyProcessor.abandonPress()
+            Task { await send(.notesTapped) }
+            return swallow
+          }
         }
 
         switch inputEvent {
@@ -637,6 +668,7 @@ private extension TranscriptionFeature {
         switch event {
         case let .captureFailed(message): await send(.notesCaptureFailed(message))
         case .silenceLimitReached: await send(.notesSilent)
+        case .discardedSilent: await send(.notesDiscardedSilent)
         case .changed: break
         }
       }
@@ -694,24 +726,33 @@ private extension TranscriptionFeature {
     )
   }
 
-  /// Stops capture and keeps the session; its transcript and notes are finished in the background.
-  func handleNotesStop(_ state: inout State) -> Effect<Action> {
+  /// Stops capture and keeps the session; its transcript and notes are finished in the background. A
+  /// session stopped sooner than `seconds` after it started was a mistake: it's deleted, not listed.
+  func handleNotesStop(
+    _ state: inout State, discardingUnder seconds: TimeInterval = NotesSession.stopDiscardSeconds
+  ) -> Effect<Action> {
     guard let session = state.notesRecording else { return .none }
     guard session.id != nil else {
       // Still starting: stop as soon as capture is up.
       state.notesRecording?.stopRequested = true
       return .none
     }
+    let discard = now.timeIntervalSince(session.startedAt) < seconds
     state.notesRecording = nil
     state.$isNotesRecording.withLock { $0 = false }
     state.meter = .init(averagePower: 0, peakPower: 0)
-    state.showNotice(.notesSaved)
+    state.showNotice(discard ? .notesDiscarded(silent: false) : .notesSaved)
     return .merge(
       .cancel(id: CancelID.notesMetering),
       .cancel(id: CancelID.notesTimer),
       .run { [notes, sleepManagement] _ in
-        await notes.stop()
-        soundEffect.play(.stopRecording)
+        if discard {
+          await notes.discard()
+          soundEffect.play(.cancel)
+        } else {
+          await notes.stop()
+          soundEffect.play(.stopRecording)
+        }
         await sleepManagement.allowSleep()
       }
     )
@@ -807,8 +848,11 @@ private extension TranscriptionFeature {
       )
     }
     state.isRecording = true
+    state.notesHold = false
     let startTime = now
     state.recordingStartTime = startTime
+    // In Notes mode a quick tap starts a session (with its own sound) instead, so this one waits out the tap.
+    let inNotesMode = state.hexSettings.rewriteMode == .notes
     
     // Capture the active application
     if let activeApp = NSWorkspace.shared.frontmostApplication {
@@ -842,9 +886,15 @@ private extension TranscriptionFeature {
         }
       }
       .cancellable(id: CancelID.superPeek, cancelInFlight: true),
+      .run { [clock] send in
+        guard inNotesMode else { return }
+        try await clock.sleep(for: .seconds(NotesTapDetector.tapWindow))
+        await send(.notesHoldConfirmed)
+      }
+      .cancellable(id: CancelID.notesHold, cancelInFlight: true),
       .run { [sleepManagement, preventSleep = state.hexSettings.preventSystemSleep] send in
         // Play sound immediately for instant feedback
-        soundEffect.play(.startRecording)
+        if !inNotesMode { soundEffect.play(.startRecording) }
 
         if preventSleep {
           await sleepManagement.preventSleep(reason: "Hex Voice Recording")
@@ -871,7 +921,7 @@ private extension TranscriptionFeature {
         await transcription.prewarm(model)
       },
       .run { [localLLM, settings = state.hexSettings] _ in
-        guard settings.rewriteMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return }
+        guard settings.dictationMode.rewrites, settings.rewritePrimary.provider == .onDevice else { return }
         await localLLM.prewarm(settings.rewritePrimary.model)
       }
     )
@@ -940,6 +990,7 @@ private extension TranscriptionFeature {
     return .merge(
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
+      .cancel(id: CancelID.notesHold),
       transcribeEffect(
         recording: nil, duration: duration, keyUp: keyUp,
         model: model, language: state.hexSettings.outputLanguage, inFlight: state.inFlight
@@ -1114,8 +1165,8 @@ private extension TranscriptionFeature {
     let biasing = state.biasing
     let transcriptionHistory = state.$transcriptionHistory
     let engine = settings.selectedModel
-    // Notes mode never reaches here unless it was picked mid-dictation; that dictation pastes as recognized.
-    let rewriteMode = skipModifications || !settings.rewriteMode.rewrites ? RewriteMode.raw : settings.rewriteMode
+    // A dictation in Notes mode (held, not tapped) is rewritten in the mode picked before Notes.
+    let rewriteMode = skipModifications || !settings.dictationMode.rewrites ? RewriteMode.raw : settings.dictationMode
 
     return .run { send in
       var timeline = timeline
@@ -1662,6 +1713,7 @@ private extension TranscriptionFeature {
       .cancel(id: CancelID.transcription),
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
+      .cancel(id: CancelID.notesHold),
       .run { [sleepManagement, localLLM] send in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
@@ -1698,6 +1750,7 @@ private extension TranscriptionFeature {
     return .merge(
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
+      .cancel(id: CancelID.notesHold),
       .run { [sleepManagement] _ in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
@@ -1751,8 +1804,12 @@ struct TranscriptionView: View {
     if let notes = store.notesRecording { return .notesRecording(since: notes.startedAt) }
     // Undo waits out a new dictation and comes back after it.
     if store.cancelled != nil, !store.isRecording, !store.isProcessing { return .cancelled }
-    let mode = store.hexSettings.rewriteMode
     guard store.isRecording else { return nil }
+    if store.hexSettings.rewriteMode == .notes {
+      // Hidden for the tap window: a quick tap becomes a session with its own pill.
+      return store.notesHold ? .notesDictating(store.hexSettings.dictationMode) : nil
+    }
+    let mode = store.hexSettings.rewriteMode
     if store.hexSettings.privateMode { return .recordingPrivate(mode) }
     return mode != .clean ? .recordingIn(mode) : nil
   }

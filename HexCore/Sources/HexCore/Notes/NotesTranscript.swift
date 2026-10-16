@@ -49,6 +49,11 @@ public struct NotesTranscript: Equatable, Sendable {
 
 	public var gapCount: Int { lines.filter(\.isGap).count }
 
+	/// No chunk has words and none failed: nothing was said (or only silence and loops were heard).
+	public var heardNothing: Bool {
+		!lines.contains { $0.isGap || !($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+	}
+
 	/// The whole transcript as prose; a gap is marked so the notes can say something is missing.
 	public var text: String {
 		Self.text(of: lines)

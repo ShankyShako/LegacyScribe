@@ -9,6 +9,27 @@ public enum NotesSpeech {
 	/// Silence put between joined speech stretches, so words from two stretches don't run together.
 	public static let joinGapSeconds = 0.2
 
+	/// Dictation audio whose loudest 100 ms stays under this is silence, whatever the VAD says: a near-silent
+	/// 11 s recording (loudest −45 dBFS) had 1.1 s Silero called speech, and Cohere wrote "Thank you.". The
+	/// quietest real dictation in History ("Yep.") peaks at −27 dBFS. Dictation only: a voice across the
+	/// table in a meeting can be much quieter than one at the microphone.
+	public static let dictationFloorDecibels: Float = -40
+
+	/// True when no 100 ms of `samples` reaches `dictationFloorDecibels` (RMS, full scale = 1).
+	public static func isBelowDictationFloor(_ samples: [Float], sampleRate: Int = NotesChunker.sampleRate) -> Bool {
+		let window = max(1, sampleRate / 10)
+		let floor = pow(10, dictationFloorDecibels / 20)
+		var start = 0
+		while start < samples.count {
+			let end = min(samples.count, start + window)
+			var sum: Float = 0
+			for index in start ..< end { sum += samples[index] * samples[index] }
+			if (sum / Float(end - start)).squareRoot() >= floor { return false }
+			start = end
+		}
+		return true
+	}
+
 	/// The speech stretches of `samples` (sample ranges, any order, may overlap) joined in order with a short
 	/// silence between them. Nil when they add up to less than `minimumSpeechSeconds`.
 	public static func joined(

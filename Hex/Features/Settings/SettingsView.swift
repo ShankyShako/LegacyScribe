@@ -39,6 +39,7 @@ struct SettingsView: View {
 			SoundSectionView(store: store)
 			GeneralSectionView(store: store)
 			HistorySectionView(store: store)
+			SpeechCoachSectionView(store: store)
 		}
 		.formStyle(.grouped)
 		.task {

@@ -111,6 +111,13 @@ struct SettingsFeature {
     case setSoundEffectsEnabled(Bool)
     case setSoundEffectsVolume(Double)
 
+    // Speech Coach
+    case setSpeechCoachEnabled(Bool)
+    case setCoachStutterFriendly(Bool)
+    /// Forwarded to AppFeature, which switches tabs.
+    case openSpeechCoach
+    case deleteCoachData
+
     // Permission delegation (forwarded to AppFeature)
     case requestMicrophone
     case requestAccessibility
@@ -194,6 +201,7 @@ struct SettingsFeature {
   @Dependency(\.rewrite) var rewrite
   @Dependency(\.keychain) var keychain
   @Dependency(\.localLLM) var localLLM
+  @Dependency(\.coach) var coach
 
   private func deleteAudioEffect(for transcripts: [Transcript]) -> Effect<Action> {
     .run { [transcriptPersistence] _ in
@@ -880,6 +888,28 @@ struct SettingsFeature {
       case let .setMaxHistoryEntries(maxHistoryEntries):
         state.$hexSettings.withLock { $0.maxHistoryEntries = maxHistoryEntries }
         return .none
+
+      case let .setSpeechCoachEnabled(isOn):
+        state.$hexSettings.withLock { $0.speechCoachEnabled = isOn }
+        return .none
+
+      case let .setCoachStutterFriendly(isOn):
+        state.$hexSettings.withLock { $0.coachStutterFriendly = isOn }
+        return .none
+
+      case .openSpeechCoach:
+        return .none
+
+      case .deleteCoachData:
+        state.$hexSettings.withLock { $0.speechCoachEnabled = false }
+        return .run { [coach] _ in
+          do {
+            try await coach.deleteData()
+            HexLog.coach.notice("Coach data deleted")
+          } catch {
+            HexLog.coach.error("Deleting coach data failed: \(error.localizedDescription, privacy: .public)")
+          }
+        }
 
       case let .setPrivateMode(isOn):
         state.$hexSettings.withLock { $0.privateMode = isOn }

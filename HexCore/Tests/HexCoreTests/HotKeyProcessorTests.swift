@@ -35,6 +35,31 @@ struct HotKeyProcessorTests {
         )
     }
 
+    // Notes mode turns a quick press into a tap that starts a session: the processor must not stay
+    // recording, nor lock on the press after it.
+    @Test
+    func abandonPress_forgetsThePressAndTheDoubleTapTiming() throws {
+        let time = LockIsolated(Date(timeIntervalSince1970: 0))
+        let option = KeyEvent(key: nil, modifiers: [.option])
+        let none = KeyEvent(key: nil, modifiers: [])
+        withDependencies {
+            $0.date = DateGenerator { time.value }
+        } operation: {
+            var processor = HotKeyProcessor(hotkey: HotKey(key: nil, modifiers: [.option]))
+            #expect(processor.process(keyEvent: option) == .startRecording)
+            time.setValue(Date(timeIntervalSince1970: 1))
+            #expect(processor.process(keyEvent: none) == .stopRecording)
+            time.setValue(Date(timeIntervalSince1970: 1.1))
+            #expect(processor.process(keyEvent: option) == .startRecording)
+            processor.abandonPress()
+            #expect(processor.state == .idle)
+            time.setValue(Date(timeIntervalSince1970: 1.15))
+            #expect(processor.process(keyEvent: option) == .startRecording)
+            time.setValue(Date(timeIntervalSince1970: 1.2))
+            #expect(processor.process(keyEvent: none) == .stopRecording, "a release, not a double-tap lock")
+        }
+    }
+
     // LegacyScribe's default hotkey is Right Option alone; Left Option must stay free for typing.
     @Test
     func pressAndHold_rightOptionOnly_ignoresLeftOption() throws {

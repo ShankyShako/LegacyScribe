@@ -23,6 +23,10 @@ enum DictationNotice: Equatable {
   case notesStoppedSilent
   /// A notes session couldn't start (no Cohere, no microphone) or capture had a problem.
   case notesProblem(String)
+  /// Held in Notes mode: an ordinary dictation in the mode picked before Notes.
+  case notesDictating(RewriteMode)
+  /// A session stopped in its first seconds, or one in which nothing was heard, was deleted.
+  case notesDiscarded(silent: Bool)
   /// This dictation is a Legacy instruction (it started with "legacy"); stays up until it's done.
   case superOn
   /// Legacy changed nothing; the dictation was copied. The message says why.
@@ -44,6 +48,8 @@ enum DictationNotice: Equatable {
     case .notesEnding: "clock"
     case .notesSaved: "checkmark.circle.fill"
     case .notesStoppedSilent: "waveform.slash"
+    case let .notesDictating(mode): mode.systemImage
+    case .notesDiscarded: "trash"
     case .rewriteFellBack, .dictationKept, .notesProblem, .superFailed: "exclamationmark.triangle.fill"
     case .superOn, .superHint: "sparkle"
     case .cancelled: "arrow.uturn.backward"
@@ -64,6 +70,8 @@ enum DictationNotice: Equatable {
     case .notesSaved: "Saved: writing notes"
     case .notesStoppedSilent: "No speech for \(Int(NotesSilenceWatch.limit / 60)) min: notes stopped"
     case let .notesProblem(message): message
+    case let .notesDictating(mode): "Notes mode: dictating as \(mode.displayName)"
+    case let .notesDiscarded(silent): silent ? "Notes session discarded: nothing was heard" : "Notes session discarded"
     case .superOn: "Legacy"
     case let .superFailed(message): message
     case .superHint: "Say \u{201C}legacy\u{201D} first to edit this"
@@ -76,7 +84,7 @@ enum DictationNotice: Equatable {
   var detail: String? {
     switch self {
     case let .modeChanged(mode): mode.shortcutDescription
-    case .rewriteFellBack, .dictationKept, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .notesProblem, .superOn, .superFailed, .superHint, .cancelled, .undoSaved, .undoCopied: nil
+    case .rewriteFellBack, .dictationKept, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .notesProblem, .notesDictating, .notesDiscarded, .superOn, .superFailed, .superHint, .cancelled, .undoSaved, .undoCopied: nil
     }
   }
 
@@ -88,7 +96,7 @@ enum DictationNotice: Equatable {
   var tint: Color {
     switch self {
     case .rewriteFellBack, .dictationKept, .notesProblem, .superFailed: .orange
-    case .modeChanged, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .superOn, .superHint, .cancelled, .undoSaved, .undoCopied: .white
+    case .modeChanged, .recordingIn, .recordingPrivate, .notesRecording, .notesEnding, .notesSaved, .notesStoppedSilent, .notesDictating, .notesDiscarded, .superOn, .superHint, .cancelled, .undoSaved, .undoCopied: .white
     }
   }
 
@@ -96,10 +104,10 @@ enum DictationNotice: Equatable {
   var holdDuration: Duration? {
     switch self {
     case .modeChanged: .milliseconds(1100)
-    case .rewriteFellBack, .notesSaved, .superHint: .milliseconds(2600)
+    case .rewriteFellBack, .notesSaved, .notesDiscarded, .superHint: .milliseconds(2600)
     case .dictationKept, .notesEnding, .notesStoppedSilent, .notesProblem, .superFailed, .undoSaved, .undoCopied: .seconds(4)
     // Undo stays until the offer ends (`HexSettings.cancelUndoSeconds`).
-    case .recordingIn, .recordingPrivate, .notesRecording, .superOn, .cancelled: nil
+    case .recordingIn, .recordingPrivate, .notesRecording, .notesDictating, .superOn, .cancelled: nil
     }
   }
 }

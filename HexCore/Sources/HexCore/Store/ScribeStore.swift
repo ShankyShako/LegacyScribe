@@ -82,6 +82,23 @@ public final class ScribeStore: Sendable {
 				t.add(column: "failure", .text)
 			}
 		}
+		// Speech coach stats per dictation (`CoachClip` as JSON), deleted with the entry. Derived data:
+		// "Turn off and delete coach data" empties it and a rerun rebuilds what still has audio.
+		migrator.registerMigration("v3") { db in
+			try db.create(table: "coach_clips") { t in
+				t.primaryKey("dictationID", .text).references("dictations", onDelete: .cascade)
+				t.column("analysedAt", .double).notNull()
+				t.column("clip", .text).notNull()
+			}
+		}
+		// Filler-free minute results (`CoachMinute` as JSON). Kept with the coach data and deleted with it.
+		migrator.registerMigration("v4") { db in
+			try db.create(table: "coach_minutes") { t in
+				t.primaryKey("id", .text)
+				t.column("date", .double).notNull()
+				t.column("minute", .text).notNull()
+			}
+		}
 		return migrator
 	}
 
@@ -144,6 +161,46 @@ public final class ScribeStore: Sendable {
 				try CorrectionRow(edit).upsert(db)
 			}
 			_ = try CorrectionRow.deleteAll(db, keys: change.deleted.map(\.uuidString))
+		}
+	}
+
+	// MARK: - Speech coach
+
+	public func coachClips() throws -> [CoachClip] {
+		try writer.read { db in
+			try CoachClipRow.fetchAll(db).compactMap { decodeJSON($0.clip) }
+		}
+	}
+
+	/// Replaces the stats of each clip's dictation. A clip whose dictation is gone is skipped.
+	public func saveCoachClips(_ clips: [CoachClip], analysedAt: Date = Date()) throws {
+		try writer.write { db in
+			for clip in clips {
+				guard try DictationRow.exists(db, key: clip.dictationID.uuidString), let json = encodeJSON(clip) else { continue }
+				try CoachClipRow(dictationID: clip.dictationID.uuidString, analysedAt: analysedAt.timeIntervalSinceReferenceDate, clip: json).upsert(db)
+			}
+		}
+	}
+
+	/// Deletes the coach's stats and minute results. History and the voiceprint are separate and stay.
+	public func deleteCoachClips() throws {
+		_ = try writer.write { db in
+			try CoachClipRow.deleteAll(db)
+			try CoachMinuteRow.deleteAll(db)
+		}
+	}
+
+	/// Oldest first.
+	public func coachMinutes() throws -> [CoachMinute] {
+		try writer.read { db in
+			try CoachMinuteRow.order(Column("date")).fetchAll(db).compactMap { decodeJSON($0.minute) }
+		}
+	}
+
+	public func saveCoachMinute(_ minute: CoachMinute) throws {
+		guard let json = encodeJSON(minute) else { return }
+		try writer.write { db in
+			try CoachMinuteRow(id: minute.id.uuidString, date: minute.date.timeIntervalSinceReferenceDate, minute: json).upsert(db)
 		}
 	}
 
@@ -313,4 +370,20 @@ private struct CorrectionRow: Codable, FetchableRecord, PersistableRecord {
 			sent: sent
 		)
 	}
+}
+
+private struct CoachClipRow: Codable, FetchableRecord, PersistableRecord {
+	static let databaseTableName = "coach_clips"
+
+	var dictationID: String
+	var analysedAt: Double
+	var clip: String
+}
+
+private struct CoachMinuteRow: Codable, FetchableRecord, PersistableRecord {
+	static let databaseTableName = "coach_minutes"
+
+	var id: String
+	var date: Double
+	var minute: String
 }

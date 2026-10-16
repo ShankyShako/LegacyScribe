@@ -45,6 +45,10 @@ struct TranscriptionClient {
 
   /// Loads a downloaded model ahead of use: the talk key went down, so it loads while the user speaks.
   var prewarm: @Sendable (String) async -> Void = { _ in }
+
+  /// The words of a recording as said, ums included, with their times, for the speech coach: a downloaded
+  /// Parakeet model, else Apple Speech. Returns the engine used. Throws when neither is available.
+  var coachWords: @Sendable (_ audio: URL, _ selectedModel: String) async throws -> (engine: String, words: [SpokenWord])
 }
 
 extension TranscriptionClient: DependencyKey {
@@ -61,7 +65,8 @@ extension TranscriptionClient: DependencyKey {
       getRecommendedModels: { await live.getRecommendedModels() },
       getAvailableModels: { try await live.getAvailableModels() },
       timedWords: { try await live.timedWords(audio: $0, words: $1, selectedModel: $2) },
-      prewarm: { await live.prewarm($0) }
+      prewarm: { await live.prewarm($0) },
+      coachWords: { try await live.coachWords(audio: $0, selectedModel: $1) }
     )
   }
   /// Warming is fire-and-forget, so tests don't have to stub it; every other endpoint is unimplemented.
@@ -265,6 +270,27 @@ actor TranscriptionClientLive {
     }
     throw NSError(domain: "TranscriptionClient", code: -5, userInfo: [
       NSLocalizedDescriptionKey: "Word timings need a Parakeet model: download one in Settings > Models",
+    ])
+  }
+
+  /// Never Cohere: it leaves most ums out (bench-results, "Fillers in transcripts"). The Parakeet model
+  /// already loaded or selected comes first, so the coach doesn't swap out the one used for dictation.
+  func coachWords(audio: URL, selectedModel: String) async throws -> (engine: String, words: [SpokenWord]) {
+    var candidates: [String] = []
+    if let current = currentModelName, isParakeet(current) { candidates.append(current) }
+    if isParakeet(selectedModel) { candidates.append(selectedModel) }
+    candidates += [ParakeetModel.multilingualV3.identifier, ParakeetModel.englishV2.identifier]
+    for model in candidates where await parakeet.isModelAvailable(model) {
+      try await parakeet.ensureLoaded(modelName: model) { _ in }
+      let clip = try ParakeetClipPreparer.ensureMinimumDuration(url: audio, logger: parakeetLogger)
+      defer { clip.cleanup() }
+      return (model, try await parakeet.timedWords(clip.url))
+    }
+    if await AppleSpeech.isInstalled() {
+      return (AppleSpeech.identifier, try await AppleSpeech.timedWords(audio))
+    }
+    throw NSError(domain: "TranscriptionClient", code: -6, userInfo: [
+      NSLocalizedDescriptionKey: "The Speech Coach needs Parakeet or Apple Speech: download one in Settings > Models",
     ])
   }
 

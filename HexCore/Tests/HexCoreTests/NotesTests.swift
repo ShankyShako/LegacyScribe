@@ -316,6 +316,20 @@ struct NotesTapDetectorTests {
 	}
 
 	@Test
+	func aLongerHoldIsReleasedNotTapped() {
+		var detector = NotesTapDetector(hotkey: HotKey(key: nil, modifiers: [.option.with(side: .right)]))
+		let start = Date()
+		#expect(detector.process(rightOption, at: start) == nil)
+		#expect(detector.process(none, at: start + NotesTapDetector.tapWindow) == .tapped)
+		#expect(detector.process(rightOption, at: start + 1) == nil)
+		#expect(detector.process(none, at: start + 1.31) == .released)
+		// Typing with the key held is neither.
+		#expect(detector.process(rightOption, at: start + 2) == nil)
+		#expect(detector.process(KeyEvent(key: .e, modifiers: [.option.with(side: .right)]), at: start + 2.1) == nil)
+		#expect(detector.process(none, at: start + 2.2) == nil)
+	}
+
+	@Test
 	func theOtherOptionKeyIsIgnored() {
 		var detector = NotesTapDetector(hotkey: HotKey(key: nil, modifiers: [.option.with(side: .right)]))
 		let leftOption = KeyEvent(key: nil, modifiers: [.option.with(side: .left)])
@@ -353,6 +367,17 @@ struct NotesSpeechTests {
 		let samples = [Float](repeating: 1, count: 3 * Self.rate)
 		let joined = NotesSpeech.joined(samples, ranges: [0 ..< 2 * Self.rate, Self.rate ..< 5 * Self.rate])
 		#expect(joined?.count == 3 * Self.rate)
+	}
+
+	@Test
+	func aQuietRoomIsBelowTheDictationFloor() {
+		// −46 dBFS of steady noise, then the same with 100 ms at −30 dBFS (a short "yep").
+		let quiet = [Float](repeating: 0.005, count: 5 * Self.rate)
+		#expect(NotesSpeech.isBelowDictationFloor(quiet))
+		var spoken = quiet
+		for index in 2 * Self.rate ..< 2 * Self.rate + Self.rate / 10 { spoken[index] = 0.03 }
+		#expect(!NotesSpeech.isBelowDictationFloor(spoken))
+		#expect(NotesSpeech.isBelowDictationFloor([]))
 	}
 
 	@Test
@@ -401,6 +426,15 @@ struct NotesTranscriptEditTests {
 		.gap(chunk: 2),
 		NotesTranscriptLine(chunk: 3, text: "Last part."),
 	])
+
+	@Test
+	func heardNothingOnlyWithoutWordsOrGaps() {
+		#expect(NotesTranscript(lines: []).heardNothing)
+		#expect(NotesTranscript(lines: [NotesTranscriptLine(chunk: 0, text: ""), NotesTranscriptLine(chunk: 1, text: "  ")]).heardNothing)
+		// A failed chunk may hold speech: its audio is kept in failed/, so the session stays.
+		#expect(!NotesTranscript(lines: [NotesTranscriptLine(chunk: 0, text: ""), .gap(chunk: 1)]).heardNothing)
+		#expect(!Self.transcript.heardNothing)
+	}
 
 	@Test
 	func paragraphsSkipEmptyChunks() {

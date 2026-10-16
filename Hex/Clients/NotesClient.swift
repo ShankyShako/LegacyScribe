@@ -36,6 +36,8 @@ enum NotesEvent: Equatable, Sendable {
 	case captureFailed(String)
 	/// Nobody has spoken in the recording session for `NotesSilenceWatch.limit`; the app stops it.
 	case silenceLimitReached
+	/// A finished session in which nothing was heard was deleted instead of listed.
+	case discardedSilent(String)
 }
 
 enum NotesError: Error, LocalizedError, Equatable {
@@ -62,6 +64,8 @@ struct NotesClient {
 	var start: @Sendable () async throws -> String
 	/// Stops capture; transcription and notes carry on in the background.
 	var stop: @Sendable () async -> Void
+	/// Stops capture and deletes the session: it was started by mistake.
+	var discard: @Sendable () async -> Void
 	var events: @Sendable () -> AsyncStream<NotesEvent> = { AsyncStream { $0.finish() } }
 	var meters: @Sendable () -> AsyncStream<Meter> = { AsyncStream { $0.finish() } }
 	/// Picks up sessions a quit or crash left unfinished.
@@ -82,6 +86,7 @@ extension NotesClient: DependencyKey {
 		return Self(
 			start: { try await engine.start() },
 			stop: { await engine.stop() },
+			discard: { await engine.discard() },
 			events: { engine.events.subscribe() },
 			meters: { engine.meters.subscribe() },
 			resumeUnfinished: { await engine.resumeUnfinished() },
@@ -265,6 +270,21 @@ actor NotesEngine {
 		wake()
 	}
 
+	/// Stops capture and deletes the session folder. Only for the first seconds of a session, before the
+	/// first chunk (~25 s) is cut, so no transcription of it can be running.
+	func discard() {
+		guard let capture, let id = capturingID else { return }
+		_ = capture.stop()
+		self.capture = nil
+		capturingID = nil
+		sessions[id] = nil
+		transcripts[id] = nil
+		progress[id] = nil
+		FileManager.default.removeItemIfExists(at: folder(id).url)
+		logger.notice("Notes session \(id, privacy: .public) discarded")
+		events.yield(.changed(id))
+	}
+
 	// MARK: - Worker
 
 	private enum Job {
@@ -311,6 +331,17 @@ actor NotesEngine {
 		case let .transcribe(id, chunk):
 			await transcribe(id, chunk: chunk)
 		case let .finishTranscribing(id):
+			if (transcripts[id] ?? folder(id).transcript.load()).heardNothing {
+				// Nothing to write notes from: the session isn't listed.
+				do {
+					try delete(id)
+					events.yield(.discardedSilent(id))
+				} catch {
+					logger.error("Silent notes session \(id, privacy: .public) not deleted: \(error.localizedDescription, privacy: .public)")
+					update(id) { $0.stage = .noting }
+				}
+				return
+			}
 			update(id) { $0.stage = .noting }
 		case let .writeNotes(id):
 			await writeNotes(id)

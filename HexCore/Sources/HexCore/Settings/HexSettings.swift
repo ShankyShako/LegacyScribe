@@ -63,7 +63,11 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var wordRemappings: [WordRemapping]
 	public var lowercaseTranscripts: Bool
 	public var removePunctuation: Bool
-	public var rewriteMode: RewriteMode
+	public var rewriteMode: RewriteMode {
+		didSet {
+			if rewriteMode != .notes { rewriteModeBeforeNotes = rewriteMode }
+		}
+	}
 	/// Tried first. API keys live in the Keychain, not here.
 	public var rewritePrimary: RewriteEndpoint
 	/// Tried when the primary fails or times out; if this fails too, the raw transcript is pasted.
@@ -122,6 +126,18 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var privateMode: Bool
 	/// How long a cancelled dictation's recording is kept for Undo (Esc, or a cancel mid-transcription); 0 deletes it at once.
 	public var cancelUndoSeconds: Int
+	/// The last mode picked other than Notes. A dictation held in Notes mode is rewritten this way.
+	public var rewriteModeBeforeNotes: RewriteMode
+	/// The Speech Coach tab (P3.6 D6): off by default, turned on at the bottom of Settings.
+	public var speechCoachEnabled: Bool
+	/// "I stutter": the coach doesn't count repeats or pauses inside sentences against the user.
+	public var coachStutterFriendly: Bool
+
+	/// The mode a push-to-talk dictation is rewritten in: Notes mode dictates in the mode picked before it.
+	public var dictationMode: RewriteMode {
+		guard rewriteMode == .notes else { return rewriteMode }
+		return rewriteModeBeforeNotes == .notes ? .clean : rewriteModeBeforeNotes
+	}
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -183,7 +199,10 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		voiceIsolationInNotes: Bool = false,
 		audioRetentionDays: Int = AudioRetention.defaultDays,
 		privateMode: Bool = false,
-		cancelUndoSeconds: Int = 30
+		cancelUndoSeconds: Int = 30,
+		rewriteModeBeforeNotes: RewriteMode = .clean,
+		speechCoachEnabled: Bool = false,
+		coachStutterFriendly: Bool = false
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -239,6 +258,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.audioRetentionDays = audioRetentionDays
 		self.privateMode = privateMode
 		self.cancelUndoSeconds = cancelUndoSeconds
+		self.rewriteModeBeforeNotes = rewriteMode == .notes ? rewriteModeBeforeNotes : rewriteMode
+		self.speechCoachEnabled = speechCoachEnabled
+		self.coachStutterFriendly = coachStutterFriendly
 		normalizeDoubleTapSettings()
 	}
 
@@ -248,6 +270,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		for field in HexSettingsSchema.fields {
 			try field.decode(into: &self, from: container)
 		}
+		// Files saved before the field existed: the mode they were in is the mode before Notes.
+		if rewriteMode != .notes { rewriteModeBeforeNotes = rewriteMode }
 		normalizeDoubleTapSettings()
 	}
 
@@ -317,6 +341,9 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case audioRetentionDays
 	case privateMode
 	case cancelUndoSeconds
+	case rewriteModeBeforeNotes
+	case speechCoachEnabled
+	case coachStutterFriendly
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -495,7 +522,10 @@ private enum HexSettingsSchema {
 		SettingsField(.voiceIsolationInNotes, keyPath: \.voiceIsolationInNotes, default: defaults.voiceIsolationInNotes).eraseToAny(),
 		SettingsField(.audioRetentionDays, keyPath: \.audioRetentionDays, default: defaults.audioRetentionDays).eraseToAny(),
 		SettingsField(.privateMode, keyPath: \.privateMode, default: defaults.privateMode).eraseToAny(),
-		SettingsField(.cancelUndoSeconds, keyPath: \.cancelUndoSeconds, default: defaults.cancelUndoSeconds).eraseToAny()
+		SettingsField(.cancelUndoSeconds, keyPath: \.cancelUndoSeconds, default: defaults.cancelUndoSeconds).eraseToAny(),
+		SettingsField(.rewriteModeBeforeNotes, keyPath: \.rewriteModeBeforeNotes, default: defaults.rewriteModeBeforeNotes).eraseToAny(),
+		SettingsField(.speechCoachEnabled, keyPath: \.speechCoachEnabled, default: defaults.speechCoachEnabled).eraseToAny(),
+		SettingsField(.coachStutterFriendly, keyPath: \.coachStutterFriendly, default: defaults.coachStutterFriendly).eraseToAny()
 	]
 }
 

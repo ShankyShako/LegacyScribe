@@ -522,6 +522,12 @@ extension HotKeyProcessor {
         }
     }
 
+    /// Forgets the current press and any double-tap timing: Notes mode turned the press into a tap that
+    /// starts a session, so it must neither stay recording nor lock on the next press.
+    public mutating func abandonPress() {
+        resetToIdle()
+    }
+
     /// Resets processor to idle state, clearing active recording state.
     ///
     /// Preserves `isDirty` flag if caller has set it, allowing dirty state

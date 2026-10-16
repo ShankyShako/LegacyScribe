@@ -36,6 +36,25 @@ final class HexSettingsMigrationTests: XCTestCase {
 		XCTAssertEqual(decoded, settings)
 	}
 
+	func testNotesModeDictatesInTheModePickedBeforeIt() throws {
+		var settings = HexSettings()
+		XCTAssertEqual(settings.dictationMode, .clean)
+		settings.rewriteMode = .prompt
+		settings.rewriteMode = .notes
+		XCTAssertEqual(settings.dictationMode, .prompt)
+		settings.rewriteMode = .raw
+		XCTAssertEqual(settings.dictationMode, .raw)
+
+		// Saved before the field existed, in Prompt: switching to Notes later still dictates as Prompt.
+		var old = try JSONDecoder().decode(HexSettings.self, from: Data(#"{"rewriteMode":"prompt"}"#.utf8))
+		old.rewriteMode = .notes
+		XCTAssertEqual(old.dictationMode, .prompt)
+		let inNotes = try JSONDecoder().decode(HexSettings.self, from: Data(#"{"rewriteMode":"notes"}"#.utf8))
+		XCTAssertEqual(inNotes.dictationMode, .clean)
+		let roundTrip = try JSONDecoder().decode(HexSettings.self, from: JSONEncoder().encode(old))
+		XCTAssertEqual(roundTrip.dictationMode, .prompt)
+	}
+
 	func testNewSettingsKeepMicrophoneColdByDefault() {
 		XCTAssertFalse(HexSettings().superFastModeEnabled)
 	}

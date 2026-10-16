@@ -41,6 +41,10 @@ public struct NotesSession: Codable, Equatable, Sendable, Identifiable {
 	public static let maxDuration: TimeInterval = 2 * 60 * 60
 	/// The indicator warns this long before the cap.
 	public static let warningLead: TimeInterval = 5 * 60
+	/// A session stopped sooner was started by mistake (a held key, a stray tap): deleted, not listed.
+	public static let stopDiscardSeconds: TimeInterval = 5
+	/// Esc this soon after the start discards the session rather than saving it.
+	public static let escapeDiscardSeconds: TimeInterval = 10
 }
 
 /// Where a session's files live: `<data root>/Notes/<id>/`.

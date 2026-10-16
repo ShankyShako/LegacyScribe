@@ -57,6 +57,35 @@ public enum AppleSpeech {
 		return joined(try await collector.value)
 	}
 
+	/// The words of the recording at `url` with their times, for the speech coach when no Parakeet model is
+	/// downloaded. A result run can hold several words; they share its time span evenly.
+	public static func timedWords(_ url: URL) async throws -> [SpokenWord] {
+		let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+		let analyzer = SpeechAnalyzer(modules: [transcriber])
+		let file = try AVAudioFile(forReading: url)
+		let collector = Task {
+			var words: [SpokenWord] = []
+			for try await result in transcriber.results {
+				for run in result.text.runs {
+					guard let range = run.audioTimeRange else { continue }
+					let pieces = String(result.text[run.range].characters).split(whereSeparator: \.isWhitespace).map(String.init)
+					guard !pieces.isEmpty else { continue }
+					let start = range.start.seconds, step = range.duration.seconds / Double(pieces.count)
+					for (i, piece) in pieces.enumerated() {
+						words.append(SpokenWord(word: piece, start: start + Double(i) * step, end: start + Double(i + 1) * step))
+					}
+				}
+			}
+			return words
+		}
+		if let end = try await analyzer.analyzeSequence(from: file) {
+			try await analyzer.finalizeAndFinish(through: end)
+		} else {
+			await analyzer.cancelAndFinishNow()
+		}
+		return try await collector.value
+	}
+
 	/// The text of 16 kHz mono samples (the start of a recording in progress), final results only.
 	public static func transcribe(samples: [Float], sampleRate: Double = 16_000) async throws -> String {
 		let url = FileManager.default.temporaryDirectory.appendingPathComponent("peek-\(UUID().uuidString).wav")

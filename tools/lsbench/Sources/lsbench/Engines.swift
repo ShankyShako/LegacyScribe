@@ -21,11 +21,12 @@ extension BenchEngine {
 final class CohereMLXEngine: BenchEngine {
     let name: String
     private let modelDir: URL
-    private let chunkSeconds: Float
+    private let chunkSeconds: Float?
     private var model: CohereTranscribeModel?
 
-    /// `chunkSeconds` matches the app's `CohereClient.chunkSeconds`; Cohere loses speech on clips over 35 s.
-    init(modelDir: URL, chunkSeconds: Float = 25) {
+    /// Without `chunkSeconds`, audio is cut like the app's (`CohereChunks`); with it, mlx-audio's own splitter
+    /// cuts every `chunkSeconds` (1200 = one pass). Cohere loses speech on clips over 35 s.
+    init(modelDir: URL, chunkSeconds: Float? = nil) {
         self.modelDir = modelDir
         self.chunkSeconds = chunkSeconds
         self.name = "cohere-mlx:\(modelDir.lastPathComponent)"
@@ -40,11 +41,18 @@ final class CohereMLXEngine: BenchEngine {
 
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let model else { throw BenchError.notLoaded }
-        let output = model.generate(
-            audio: MLXArray(samples),
-            generationParameters: STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
-        )
-        return output.text.replacingOccurrences(of: "\n", with: " ")
+        if let chunkSeconds {
+            let output = model.generate(
+                audio: MLXArray(samples),
+                generationParameters: STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
+            )
+            return output.text.replacingOccurrences(of: "\n", with: " ")
+        }
+        let parameters = STTGenerateParameters(language: "en", chunkDuration: Float(CohereChunks.singlePassSeconds) + 5)
+        return CohereChunks.ranges(samples, sampleRate: 16_000).map { range in
+            model.generate(audio: MLXArray(Array(samples[range])), generationParameters: parameters).text
+                .replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     func unload() {

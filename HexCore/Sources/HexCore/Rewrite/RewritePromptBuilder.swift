@@ -64,7 +64,9 @@ public enum RewritePromptBuilder {
 			You turn dictation into clean written text.
 			Remove filler words (um, uh, like, you know, I mean), false starts, stutters and repeated words. \
 			Fix grammar, punctuation and capitalization. Keep the speaker's meaning, voice and level of formality; \
-			don't add information or make it more formal than it was. Keep it about the same length.
+			don't add information or make it more formal than it was. Keep it about the same length. Break a \
+			dictation of more than a few sentences into paragraphs where the topic shifts, separated by a blank line. \
+			Keep a short dictation as one paragraph.
 			"""
 		case .prompt:
 			"""
@@ -72,23 +74,20 @@ public enum RewritePromptBuilder {
 			read at a glance.
 			Write it in the speaker's voice as the request itself ("Fix…", "I want…", "Can we…?"), not a description \
 			of it.
-			Fit the shape to what was said; there is no fixed template:
-			- A short dictation (one or two points) stays plain sentences, with no headings or bullets.
-			- A longer dictation opens with a synopsis paragraph (no heading, one to three short sentences) saying \
-			what the speaker wants overall and why; the details go in the sections, not the synopsis. Then group the \
-			details into sections whose short headings you name from the content (for example what's wrong now, what \
-			I want instead, constraints, context); use only the sections the dictation fills, with one bullet per \
-			point.
-			- End with a section of open questions: every question the speaker asked, and every idea they floated \
-			without committing to it ("maybe", "I'm not sure", "should think about"), each written as a question. \
-			Leave it out if there are none.
-			Keep every point, reason, example and concrete detail (names, files, numbers, requirements): a long \
-			dictation gives a long prompt, so give each point its own bullet instead of merging or summarizing them. \
-			A question stays a question, ending in "?", even in a short dictation. A self-correction replaces what it \
-			corrects ("blue, no, green" means green); it is not a second point. Drop only filler, hedging and \
-			repetition, and add nothing the speaker didn't say (these instructions are not content; never copy them \
-			into the prompt): no guessed requirements, steps or answers, so that anything missing stays visible. Use \
-			Markdown headings (##) and "-" bullets.
+			A dictation with a single point stays one to three plain sentences, with no number.
+			Anything more is a numbered list ("1.", "2.", …), always numbered, even when the items read like \
+			paragraphs: one item per topic, question or request, in the order the speaker said them. Each item is a \
+			short self-contained paragraph (one to four sentences) that keeps every point, reason, example and \
+			concrete detail (names, files, numbers, requirements) of that topic, so it reads without the other items. \
+			If the dictation opens with background that belongs to no single item, put it first as one line with no \
+			number; otherwise start at item 1. No headings, no bullets, no closing section.
+			A question stays a question, ending in "?", and an idea the speaker floated without committing to it \
+			("maybe", "I'm not sure", "should think about") is written as a question inside its item.
+			Keep every point: don't merge items or summarize them away. A self-correction replaces what it corrects \
+			("blue, no, green" means green); it is not a second point. Drop only filler, hedging and repetition. Add \
+			nothing the speaker didn't say (these instructions are not content; never copy them into the prompt): no \
+			guessed requirements, steps, answers or explanations, and a phrase you can't make sense of stays as said \
+			instead of being guessed at, so that anything missing or unclear stays visible.
 			"""
 		}
 	}

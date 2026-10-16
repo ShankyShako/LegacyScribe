@@ -10,6 +10,7 @@ actor CohereClient {
   private var model: CohereTranscribeModel?
   private var currentVariant: CohereModel?
   private let converter = AudioConverter()
+  private let voice = NotesVoiceDetector()
   private let logger = HexLog.transcription
 
   /// Drops the weights and MLX's buffer cache. Metal hands the memory back to the system a few seconds
@@ -64,13 +65,38 @@ actor CohereClient {
 
   /// Loads the model first if it was unloaded, in the same actor turn, so an unload can't land between.
   func transcribe(_ url: URL, modelName: String) async throws -> String {
+    try await transcribe(samples: try converter.resampleAudioFile(url), modelName: modelName)
+  }
+
+  /// Dictation: only the speech Silero VAD finds goes to Cohere (stretches joined as in Notes, `NotesSpeech`).
+  /// Given silence or a near-silent stretch Cohere writes "Thank you.": 14 of 16 History dictations ending
+  /// that way had no "thank you" in them, and gating removed 13 (bench-results). No speech → empty text,
+  /// which pastes nothing. A recording that never gets louder than `NotesSpeech.dictationFloorDecibels` is
+  /// empty too, because Silero sometimes calls a quiet room speech. If the VAD can't load (offline before its
+  /// first download), all of it goes.
+  func transcribeSpeech(_ url: URL, modelName: String) async throws -> String {
+    var samples = try converter.resampleAudioFile(url)
+    guard !NotesSpeech.isBelowDictationFloor(samples) else { return "" }
+    do {
+      guard let speech = NotesSpeech.joined(samples, ranges: try await voice.speechRanges(in: samples)) else { return "" }
+      samples = speech
+    } catch {
+      logger.error("Dictation speech detection failed, transcribing all of it: \(error.localizedDescription, privacy: .public)")
+    }
+    return try await transcribe(samples: samples, modelName: modelName)
+  }
+
+  /// 16 kHz mono samples, cut where `CohereChunks` says; the pieces' transcripts are one dictation.
+  func transcribe(samples: [Float], modelName: String) async throws -> String {
     try await ensureLoaded(modelName: modelName) { _ in }
     guard let model else { throw CohereError.notLoaded }
-    let samples = try converter.resampleAudioFile(url)
-    // Chunk transcripts come back joined by newlines; they're one dictation.
-    return model.generate(audio: MLXArray(samples), generationParameters: Self.parameters).text
-      .replacingOccurrences(of: "\n", with: " ")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return CohereChunks.ranges(samples, sampleRate: 16_000).map { range in
+      model.generate(audio: MLXArray(Array(samples[range])), generationParameters: Self.parameters).text
+        .replacingOccurrences(of: "\n", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
   }
 
   func deleteCaches(modelName: String) throws {
@@ -86,10 +112,9 @@ actor CohereClient {
   }
 
   /// Cohere was trained on clips up to 35 s (`max_audio_clip_s`); fed a longer one in a single pass it drops
-  /// most of the speech and loops on a sentence. The splitter cuts at the quietest point within ±5 s of each
-  /// 25 s mark, so every chunk stays at or under 30 s.
-  static let chunkSeconds: Float = 25
-  private static let parameters = STTGenerateParameters(language: "en", chunkDuration: chunkSeconds)
+  /// most of the speech and loops on a sentence. `CohereChunks` cuts the audio into pieces of at most 30 s,
+  /// so mlx-audio's own splitter (which left slivers that came back as "Thank you.") never runs.
+  private static let parameters = STTGenerateParameters(language: "en", chunkDuration: Float(CohereChunks.singlePassSeconds) + 5)
 
   private func directory(for variant: CohereModel) throws -> URL {
     try URL.hexMLXModelsDirectory.appendingPathComponent(variant.repository, isDirectory: true)

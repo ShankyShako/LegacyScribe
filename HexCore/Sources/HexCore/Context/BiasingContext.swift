@@ -278,8 +278,15 @@ public enum CorrectionTerms {
 
 	/// The sent spellings of every replaced span (1–3 words each side) that looks like a spelling fix.
 	static func fixes(pasted: String, sent: String) -> [String] {
+		fixPairs(pasted: pasted, sent: sent).map(\.new)
+	}
+
+	/// Every replaced span (1–3 words each side) that looks like a spelling fix, as pasted and as sent.
+	/// `keepGrammar` keeps fixes that only add or drop an ending ("can" → "can't"), which the vocabulary
+	/// leaves out but the speech coach wants: it has a second engine to tell edits from mishearings.
+	public static func fixPairs(pasted: String, sent: String, keepGrammar: Bool = false) -> [(old: String, new: String)] {
 		let a = words(pasted), b = words(sent)
-		var terms: [String] = []
+		var pairs: [(old: String, new: String)] = []
 		for (old, new) in replacements(a, b) where (1 ... 3).contains(old.count) && (1 ... 3).contains(new.count) {
 			let oldText = old.joined(separator: " "), newText = new.joined(separator: " ")
 			guard oldText != newText, newText.count >= 3 else { continue }
@@ -288,13 +295,13 @@ public enum CorrectionTerms {
 			// Dropping a capital ("The" → "the") isn't a spelling worth keeping.
 			if oldKey == newKey, newText == newText.lowercased() { continue }
 			// Nor is grammar: "take" → "takes", "app" → "app's", "walked" → "walk".
-			if oldKey != newKey, newText == newText.lowercased(), oldKey.hasPrefix(newKey) || newKey.hasPrefix(oldKey) {
+			if !keepGrammar, oldKey != newKey, newText == newText.lowercased(), oldKey.hasPrefix(newKey) || newKey.hasPrefix(oldKey) {
 				continue
 			}
 			guard similarity(oldKey, newKey) >= 0.6 else { continue }
-			terms.append(newText)
+			pairs.append((oldText, newText))
 		}
-		return terms
+		return pairs
 	}
 
 	static func words(_ text: String) -> [String] {

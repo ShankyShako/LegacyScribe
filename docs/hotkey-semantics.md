@@ -295,16 +295,19 @@ Now recording is locked on:
 
 ## Notes Mode
 
-When the rewrite mode is Notes and no dictation is under way (the processor is idle), or while a notes session records, key events go to `NotesTapDetector` instead of `HotKeyProcessor`.
+While a notes session records, key events go to `NotesTapDetector` only. When the rewrite mode is Notes and no session records, they go to both: the detector decides whether a press was a tap, and `HotKeyProcessor` handles every other press as an ordinary dictation.
 
-- **Clean tap** (hotkey pressed, then released, nothing else pressed in between) → start a session, or stop the running one. It fires on release, so holding the talk key to type a character never starts a session.
+- **Tap** (hotkey pressed and released within 0.3 s, `NotesTapDetector.tapWindow`, the double-tap window, nothing else pressed in between, and nothing recording when it was pressed) → start a session. The press already started a dictation, as every press does; it is dropped silently and the session's start sound is the only one. The dictation's own start sound waits out the 0.3 s for this reason.
+- **Hold** (a press longer than 0.3 s, no session) → an ordinary push-to-talk dictation (Esc and Undo as usual; there's no double-tap lock, since the first quick tap starts a session), rewritten in the mode picked before Notes (`HexSettings.rewriteModeBeforeNotes`, Clean if none). Once past 0.3 s the pill says "Notes mode: dictating as Clean". Notes mode stays picked.
+- **While a session records**, any clean press (tap or hold) stops it. Fires on release, so holding the talk key to type a character never stops it.
 - **Another key or an extra modifier while the hotkey is held** → not a tap (Right ⌥ + ⌃ taps still step modes).
-- **Esc** (no modifiers) → stop the running session and keep it.
+- **Esc** (no modifiers) → stop the running session and keep it; within its first 10 s, discard it.
+- **A session stopped within 5 s of its start** → deleted instead of listed, with "Notes session discarded". A finished session in which nothing was heard (no words, no failed chunk) is deleted too.
 - **A tap within 0.6 s of the start** → ignored, so a habitual double-tap doesn't end the session it just began.
 - **Interception**: a key hotkey's own key is blocked while held, as for dictation; modifier-only hotkeys pass through.
-- **Mode switched to Notes mid-dictation** → that dictation stays with `HotKeyProcessor` and pastes as recognized.
+- **Mode switched to Notes mid-dictation** → that dictation is rewritten in the mode picked before Notes, like a hold.
 
-The processor can't be reused here: after a double-tap lock it reports the stopping *press* as `.stopRecording`, which looks the same as a release.
+The processor can't stop a session: after a double-tap lock it reports the stopping *press* as `.stopRecording`, which looks the same as a release. That's also why a press that began while a locked dictation recorded is never a tap.
 
 Tests: `NotesTapDetectorTests` in `HexCore/Tests/HexCoreTests/NotesTests.swift`.
 

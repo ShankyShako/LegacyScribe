@@ -24,6 +24,7 @@ struct AppFeature {
     case practice
     case notes
     case history
+    case coach
     case about
   }
 
@@ -34,6 +35,7 @@ struct AppFeature {
 		var history: HistoryFeature.State = .init()
 		var practice: PracticeFeature.State = .init()
 		var notes: NotesFeature.State = .init()
+		var coach: CoachFeature.State = .init()
 		var activeTab: ActiveTab = .settings
 		@Shared(.hexSettings) var hexSettings: HexSettings
 		@Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
@@ -51,6 +53,7 @@ struct AppFeature {
     case history(HistoryFeature.Action)
     case practice(PracticeFeature.Action)
     case notes(NotesFeature.Action)
+    case coach(CoachFeature.Action)
     case setActiveTab(ActiveTab)
     case task
     case pasteLastTranscript
@@ -89,6 +92,10 @@ struct AppFeature {
 
     Scope(state: \.notes, action: \.notes) {
       NotesFeature()
+    }
+
+    Scope(state: \.coach, action: \.coach) {
+      CoachFeature()
     }
 
     Reduce { state, action in
@@ -162,7 +169,19 @@ struct AppFeature {
           }
         }
 
+      case .settings(.openSpeechCoach):
+        state.activeTab = .coach
+        return .none
+
+      case .settings(.deleteCoachData), .settings(.setSpeechCoachEnabled(false)):
+        if state.activeTab == .coach { state.activeTab = .settings }
+        state.coach = .init()
+        return .none
+
       case .settings:
+        return .none
+
+      case .coach:
         return .none
 
       case .history(.navigateToSettings):
@@ -349,6 +368,16 @@ struct AppView: View {
         .buttonStyle(.plain)
         .tag(AppFeature.ActiveTab.history)
 
+        if store.hexSettings.speechCoachEnabled {
+          Button {
+            store.send(.setActiveTab(.coach))
+          } label: {
+            Label("Speech Coach", systemImage: "chart.line.downtrend.xyaxis")
+          }
+          .buttonStyle(.plain)
+          .tag(AppFeature.ActiveTab.coach)
+        }
+
         Button {
           store.send(.setActiveTab(.about))
         } label: {
@@ -385,6 +414,9 @@ struct AppView: View {
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")
+      case .coach:
+        CoachView(store: store.scope(state: \.coach, action: \.coach))
+          .navigationTitle("Speech Coach")
       case .about:
         AboutView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("About")
