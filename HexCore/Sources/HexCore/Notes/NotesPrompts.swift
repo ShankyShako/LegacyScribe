@@ -48,12 +48,20 @@ public enum NotesPrompts {
 	be empty. Output only the notes: no preamble, no commentary.
 	"""
 
-	/// Notes for one piece. `part` is 1-based.
-	public static func pieceMessages(_ text: String, part: Int, of total: Int, vocabulary: [String] = []) -> [ChatMessage] {
+	/// Added to `rules` when the transcript carries speaker labels (a session that heard more than one voice).
+	static let speakersRule = """
+	Lines starting with "You:" are the person who recorded; "Speaker N:" are others. Attribute an action item \
+	or decision to its speaker when it matters.
+	"""
+
+	/// Notes for one piece. `part` is 1-based. `speakerLabels`: the transcript's lines start with speaker labels.
+	public static func pieceMessages(
+		_ text: String, part: Int, of total: Int, vocabulary: [String] = [], speakerLabels: Bool = false
+	) -> [ChatMessage] {
 		let position = total > 1 ? "This is part \(part) of \(total) of the transcript, in order. " : ""
 		let system = """
 		You turn a spoken ramble into notes. \(position)
-		\(rules)
+		\(rules)\(speakerLabels ? "\n" + speakersRule : "")
 		\(format)\(vocabularyLine(vocabulary))
 		"""
 		return [

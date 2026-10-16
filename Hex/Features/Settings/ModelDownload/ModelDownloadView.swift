@@ -12,6 +12,7 @@ public struct ModelDownloadView: View {
 
 	@Bindable var store: StoreOf<ModelDownloadFeature>
 	@State private var isModelLibraryPresented = false
+	@State private var machine: MachineProbe?
 	var shouldFlash: Bool = false
 
 	public init(store: StoreOf<ModelDownloadFeature>, shouldFlash: Bool = false) {
@@ -36,6 +37,7 @@ public struct ModelDownloadView: View {
 				NoModelChooser(
 					models: parakeetModels,
 					suggestedModel: suggestedParakeetIdentifier,
+					machine: machine,
 					isLoading: store.isLoadingModels,
 					isFlashing: shouldFlash,
 					onDownload: { store.send(.downloadModel($0.internalName)) },
@@ -47,6 +49,7 @@ public struct ModelDownloadView: View {
 					model: selectedModel,
 					selectedModelName: selectedModelName,
 					isInstalled: store.selectedModelIsDownloaded,
+					fit: selectedModel?.fit(on: machine) ?? .fits,
 					isDownloadingAnything: store.isDownloading,
 					downloadingModel: downloadingModel,
 					downloadProgress: store.downloadProgress,
@@ -72,6 +75,7 @@ public struct ModelDownloadView: View {
 			ModelLibrarySheet(store: store)
 		}
 		.task {
+			machine = MachineProbe.current()
 			if store.availableModels.isEmpty {
 				store.send(.fetchModels)
 			}
@@ -111,6 +115,7 @@ public struct ModelDownloadView: View {
 private struct NoModelChooser: View {
 	let models: [CuratedModelInfo]
 	let suggestedModel: String
+	let machine: MachineProbe?
 	let isLoading: Bool
 	let isFlashing: Bool
 	let onDownload: (CuratedModelInfo) -> Void
@@ -155,6 +160,7 @@ private struct NoModelChooser: View {
 					ForEach(models) { model in
 						NoModelCard(
 							model: model,
+							fit: model.fit(on: machine),
 							isRecommended: matches(model),
 							isFlashing: isFlashing && matches(model),
 							onDownload: { onDownload(model) }
@@ -184,48 +190,62 @@ private struct NoModelChooser: View {
 
 private struct NoModelCard: View {
 	let model: CuratedModelInfo
+	let fit: ModelFit.Verdict
 	let isRecommended: Bool
 	let isFlashing: Bool
 	let onDownload: () -> Void
 
 	var body: some View {
-		Button(action: onDownload) {
-			VStack(alignment: .leading, spacing: 8) {
-				HStack(alignment: .top, spacing: 8) {
-					Text(model.displayName)
-						.font(.body.weight(.medium))
-						.foregroundStyle(.primary)
-					Spacer(minLength: 8)
-					if isRecommended {
-						Text("Suggested")
-							.font(.caption2.weight(.medium))
-							.foregroundStyle(Color.accentColor)
-							.padding(.horizontal, 6)
-							.padding(.vertical, 2)
-							.background(Color.accentColor.opacity(0.12), in: Capsule())
-					}
+		if let reason = fit.reason {
+			content(reason: reason)
+				.opacity(0.55)
+		} else {
+			Button(action: onDownload) { content(reason: nil) }
+				.buttonStyle(.plain)
+		}
+	}
+
+	private func content(reason: String?) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			HStack(alignment: .top, spacing: 8) {
+				Text(model.displayName)
+					.font(.body.weight(.medium))
+					.foregroundStyle(.primary)
+				Spacer(minLength: 8)
+				if reason != nil {
+					WontFitBadge()
+				} else if isRecommended {
+					Text("Suggested")
+						.font(.caption2.weight(.medium))
+						.foregroundStyle(Color.accentColor)
+						.padding(.horizontal, 6)
+						.padding(.vertical, 2)
+						.background(Color.accentColor.opacity(0.12), in: Capsule())
 				}
-				HStack(spacing: 6) {
-					Text(model.size)
-					Text("·")
-					Text(model.storageSize)
-					Spacer()
+			}
+			HStack(spacing: 6) {
+				Text(model.size)
+				Text("·")
+				Text(model.storageSize)
+				Spacer()
+				if let reason {
+					WontFitInfoButton(reason: reason)
+				} else {
 					Image(systemName: "arrow.down.circle")
 				}
-				.font(.caption)
-				.foregroundStyle(.secondary)
 			}
-			.padding(12)
-			.frame(maxWidth: .infinity, alignment: .leading)
-			.background(Color(NSColor.windowBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
-			.overlay(
-				RoundedRectangle(cornerRadius: 8)
-					.stroke(borderColor, lineWidth: isFlashing ? 3 : 1)
-					.animation(.easeInOut(duration: 0.5).repeatCount(3, autoreverses: true), value: isFlashing)
-			)
-			.contentShape(.rect)
+			.font(.caption)
+			.foregroundStyle(.secondary)
 		}
-		.buttonStyle(.plain)
+		.padding(12)
+		.frame(maxWidth: .infinity, alignment: .leading)
+		.background(Color(NSColor.windowBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+		.overlay(
+			RoundedRectangle(cornerRadius: 8)
+				.stroke(borderColor, lineWidth: isFlashing ? 3 : 1)
+				.animation(.easeInOut(duration: 0.5).repeatCount(3, autoreverses: true), value: isFlashing)
+		)
+		.contentShape(.rect)
 	}
 
 	private var borderColor: Color {
@@ -239,6 +259,7 @@ private struct CurrentModelSummary: View {
 	let model: CuratedModelInfo?
 	let selectedModelName: String?
 	let isInstalled: Bool
+	let fit: ModelFit.Verdict
 	let isDownloadingAnything: Bool
 	let downloadingModel: CuratedModelInfo?
 	let downloadProgress: Double
@@ -284,9 +305,14 @@ private struct CurrentModelSummary: View {
 			} else {
 				HStack(spacing: 8) {
 					if needsDownload {
+						if let reason = fit.reason {
+							WontFitBadge()
+							WontFitInfoButton(reason: reason)
+						}
 						Button("Download", action: onDownload)
 							.buttonStyle(.borderedProminent)
 							.controlSize(.small)
+							.disabled(fit.reason != nil)
 					}
 					Button("Browse Models…", action: onBrowse)
 						.controlSize(.small)
@@ -341,6 +367,7 @@ private struct ModelLibrarySheet: View {
 	@Bindable var store: StoreOf<ModelDownloadFeature>
 	@Environment(\.dismiss) private var dismiss
 	@State private var pendingDelete: CuratedModelInfo?
+	@State private var machine: MachineProbe?
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 14) {
@@ -374,6 +401,7 @@ private struct ModelLibrarySheet: View {
 		}
 		.padding(18)
 		.frame(minWidth: 680, minHeight: 420)
+		.onAppear { machine = MachineProbe.current() }
 		.confirmationDialog(
 			"Remove \(pendingDelete?.displayName ?? "model")?",
 			isPresented: Binding(
@@ -419,6 +447,7 @@ private struct ModelLibrarySheet: View {
 						downloadProgress: isDownloading(model) ? store.downloadProgress : 0,
 						isDisabled: store.isDownloading && !isDownloading(model),
 						showsBadge: showsBadges && !model.isDownloaded,
+						fit: model.fit(on: machine),
 						onSelect: { select(model) },
 						onDownload: { store.send(.downloadModel(model.internalName)) },
 						onCancelDownload: { store.send(.cancelDownload) },
@@ -464,6 +493,7 @@ private struct ModelLibraryRow: View {
 	let downloadProgress: Double
 	let isDisabled: Bool
 	let showsBadge: Bool
+	let fit: ModelFit.Verdict
 	let onSelect: () -> Void
 	let onDownload: () -> Void
 	let onCancelDownload: () -> Void
@@ -483,7 +513,9 @@ private struct ModelLibraryRow: View {
 						HStack(spacing: 7) {
 							Text(model.displayName)
 								.font(.body.weight(.medium))
-							if showsBadge, let badge = model.badge {
+							if fit.reason != nil {
+								WontFitBadge()
+							} else if showsBadge, let badge = model.badge {
 								Text(badge)
 									.font(.caption2.weight(.medium))
 									.foregroundStyle(Color.accentColor)
@@ -525,12 +557,19 @@ private struct ModelLibraryRow: View {
 				.contentShape(.rect)
 			}
 			.buttonStyle(.plain)
+			.disabled(isDisabled)
+
+			// Outside the disabled scope so the reason stays readable while another download runs.
+			if let reason = fit.reason {
+				WontFitInfoButton(reason: reason)
+					.padding(.trailing, 10)
+			}
 
 			trailingControls
+				.disabled(isDisabled)
 				.padding(.trailing, 12)
 		}
-		.disabled(isDisabled)
-		.opacity(isDisabled ? 0.55 : 1)
+		.opacity(isDisabled || fit.reason != nil ? 0.55 : 1)
 		.background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
 		.contextMenu {
 			if isDownloading {
@@ -580,7 +619,8 @@ private struct ModelLibraryRow: View {
 		} else {
 			Button("Download", action: onDownload)
 				.controlSize(.small)
-				.help("Download \(model.storageSize) and switch to this model")
+				.disabled(fit.reason != nil)
+				.help(fit.reason ?? "Download \(model.storageSize) and switch to this model")
 		}
 	}
 

@@ -61,6 +61,8 @@ public struct NotesSessionFolder: Sendable {
 	public var partsURL: URL { url.appending(component: "notes", directoryHint: .isDirectory) }
 	public var notesURL: URL { url.appending(component: "notes.md") }
 	public var transcript: NotesTranscriptFile { NotesTranscriptFile(directory: url) }
+	/// The session's `SpeakerRegistry`, written before each transcript commit that added a speaker turn.
+	public var speakersURL: URL { url.appending(component: "speakers.json") }
 
 	public func pendingChunkURL(_ index: Int) -> URL {
 		pendingURL.appending(component: Self.chunkName(index))
@@ -103,6 +105,19 @@ public struct NotesSessionFolder: Sendable {
 
 	public func saveManifest(_ session: NotesSession) throws {
 		try Self.encoder.encode(session).write(to: manifestURL, options: .atomic)
+	}
+
+	/// Nil when the session has none (recorded before speaker labels, or no speaker heard yet) or it doesn't parse.
+	public func loadSpeakers() -> SpeakerRegistry? {
+		guard let data = try? Data(contentsOf: speakersURL) else { return nil }
+		return try? JSONDecoder().decode(SpeakerRegistry.self, from: data)
+	}
+
+	/// Atomic. A registry ahead of the transcript is harmless; one behind it would renumber speakers.
+	public func saveSpeakers(_ registry: SpeakerRegistry) throws {
+		let encoder = JSONEncoder()
+		encoder.outputFormatting = [.sortedKeys]
+		try encoder.encode(registry).write(to: speakersURL, options: .atomic)
 	}
 
 	/// Chunk indices waiting in `pending/`, oldest first.

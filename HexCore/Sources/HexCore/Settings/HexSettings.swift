@@ -120,6 +120,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var voiceIsolationEnabled: Bool
 	/// The same for notes sessions (off by default: a meeting may need every voice in the room).
 	public var voiceIsolationInNotes: Bool
+	/// Notes sessions split each chunk by speaker and label the transcript when more than one voice was heard
+	/// (`SpeakerRegistry`). Without the diarizer model the transcript is unlabelled, as before.
+	public var notesSpeakerLabels: Bool
 	/// Dictation recordings older than this many days are deleted (the text stays); 0 keeps them forever.
 	public var audioRetentionDays: Int
 	/// No network at all (`NetworkPolicy`): only the on-device model rewrites, no update checks or downloads.
@@ -197,6 +200,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		notesExportFolder: String? = nil,
 		voiceIsolationEnabled: Bool = false,
 		voiceIsolationInNotes: Bool = false,
+		notesSpeakerLabels: Bool = true,
 		audioRetentionDays: Int = AudioRetention.defaultDays,
 		privateMode: Bool = false,
 		cancelUndoSeconds: Int = 30,
@@ -255,6 +259,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.notesExportFolder = notesExportFolder
 		self.voiceIsolationEnabled = voiceIsolationEnabled
 		self.voiceIsolationInNotes = voiceIsolationInNotes
+		self.notesSpeakerLabels = notesSpeakerLabels
 		self.audioRetentionDays = audioRetentionDays
 		self.privateMode = privateMode
 		self.cancelUndoSeconds = cancelUndoSeconds
@@ -338,6 +343,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case notesExportFolder
 	case voiceIsolationEnabled
 	case voiceIsolationInNotes
+	case notesSpeakerLabels
 	case audioRetentionDays
 	case privateMode
 	case cancelUndoSeconds
@@ -520,6 +526,7 @@ private enum HexSettingsSchema {
 		).eraseToAny(),
 		SettingsField(.voiceIsolationEnabled, keyPath: \.voiceIsolationEnabled, default: defaults.voiceIsolationEnabled).eraseToAny(),
 		SettingsField(.voiceIsolationInNotes, keyPath: \.voiceIsolationInNotes, default: defaults.voiceIsolationInNotes).eraseToAny(),
+		SettingsField(.notesSpeakerLabels, keyPath: \.notesSpeakerLabels, default: defaults.notesSpeakerLabels).eraseToAny(),
 		SettingsField(.audioRetentionDays, keyPath: \.audioRetentionDays, default: defaults.audioRetentionDays).eraseToAny(),
 		SettingsField(.privateMode, keyPath: \.privateMode, default: defaults.privateMode).eraseToAny(),
 		SettingsField(.cancelUndoSeconds, keyPath: \.cancelUndoSeconds, default: defaults.cancelUndoSeconds).eraseToAny(),

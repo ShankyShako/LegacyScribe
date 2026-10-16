@@ -33,6 +33,8 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 	public let accuracyStars: Int
 	public let speedStars: Int
 	public let storageSize: String
+	/// Physical memory this Mac needs to run the model; nil = no known limit.
+	public let minMemoryGB: Int?
 	public var isDownloaded: Bool
 	public var id: String { internalName }
 
@@ -65,6 +67,7 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		accuracyStars: Int,
 		speedStars: Int,
 		storageSize: String,
+		minMemoryGB: Int? = nil,
 		isDownloaded: Bool
 	) {
 		self.displayName = displayName
@@ -73,11 +76,12 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		self.accuracyStars = accuracyStars
 		self.speedStars = speedStars
 		self.storageSize = storageSize
+		self.minMemoryGB = minMemoryGB
 		self.isDownloaded = isDownloaded
 	}
 
 	// Codable (isDownloaded is set at runtime)
-	private enum CodingKeys: String, CodingKey { case displayName, internalName, size, accuracyStars, speedStars, storageSize }
+	private enum CodingKeys: String, CodingKey { case displayName, internalName, size, accuracyStars, speedStars, storageSize, minMemoryGB }
 	public init(from decoder: Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
 		displayName = try c.decode(String.self, forKey: .displayName)
@@ -86,6 +90,7 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		accuracyStars = try c.decode(Int.self, forKey: .accuracyStars)
 		speedStars = try c.decode(Int.self, forKey: .speedStars)
 		storageSize = try c.decode(String.self, forKey: .storageSize)
+		minMemoryGB = try c.decodeIfPresent(Int.self, forKey: .minMemoryGB)
 		isDownloaded = false
 	}
 }

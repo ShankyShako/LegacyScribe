@@ -1,15 +1,68 @@
 import Foundation
 
+/// One speaker's words in a chunk; `speaker` is an ID in the session's `SpeakerRegistry` (`speakers.json`).
+/// `overlapping` is stored only when true (`{"overlapping": true}`): another voice was heard at the same time.
+public struct NotesTranscriptTurn: Codable, Equatable, Sendable {
+	public var speaker: Int
+	public var text: String
+	public var overlapping: Bool?
+
+	public init(speaker: Int, text: String, overlapping: Bool = false) {
+		self.speaker = speaker
+		self.text = text
+		self.overlapping = overlapping ? true : nil
+	}
+
+	public var isOverlapping: Bool { overlapping == true }
+}
+
+/// A paragraph of the transcript as the Transcript tab shows it: one per speaker turn, or one per unlabelled
+/// chunk or gap (`speaker` nil).
+public struct NotesTranscriptParagraph: Equatable, Sendable {
+	public var speaker: Int?
+	public var text: String
+	public var overlapping: Bool
+
+	public init(speaker: Int?, text: String, overlapping: Bool = false) {
+		self.speaker = speaker
+		self.text = text
+		self.overlapping = overlapping
+	}
+}
+
 /// One transcribed chunk of a notes session: `{"chunk": n, "text": "…"}`, or `{"chunk": n, "gap": true}`
-/// for a chunk that failed twice (its audio is kept in `failed/`).
+/// for a chunk that failed twice (its audio is kept in `failed/`). A chunk split by speaker also has
+/// `"turns": [{"speaker": 1, "text": "…"}, …]`; its `text` is still the plain chunk text (the turns joined),
+/// so everything that reads `text`, and an older app, works unchanged. A line without `turns` is one
+/// unlabelled chunk.
 public struct NotesTranscriptLine: Codable, Equatable, Sendable {
 	public var chunk: Int
 	public var text: String?
 	public var gap: Bool?
+	public var turns: [NotesTranscriptTurn]?
 
 	public init(chunk: Int, text: String) {
 		self.chunk = chunk
 		self.text = text
+	}
+
+	/// `text` is the turns' texts joined by a space; no turns is an empty line.
+	public init(chunk: Int, turns: [NotesTranscriptTurn]) {
+		self.chunk = chunk
+		self.text = turns.map(\.text).joined(separator: " ")
+		self.turns = turns.isEmpty ? nil : turns
+	}
+
+	/// The line as shown with speaker labels: one entry per turn, `"<label>: <text>"` where `labels` names
+	/// the speaker; the plain text for an unlabelled line or a speaker without a label.
+	func labelled(_ labels: (Int) -> String?) -> [String] {
+		if isGap { return [NotesTranscript.gapMarker] }
+		guard let turns else { return [(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)] }
+		return turns.map { turn in
+			let text = turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+			guard !text.isEmpty, let label = labels(turn.speaker) else { return text }
+			return "\(label): \(text)"
+		}
 	}
 
 	public static func gap(chunk: Int) -> Self {
@@ -61,25 +114,62 @@ public struct NotesTranscript: Equatable, Sendable {
 
 	public static let gapMarker = "[gap: this stretch of audio could not be transcribed]"
 
-	public static func text(of lines: [NotesTranscriptLine]) -> String {
-		lines
-			.map { $0.isGap ? gapMarker : ($0.text ?? "") }
+	/// Prose for the notes writer. With `labels` (`SpeakerRegistry.transcriptLabels`, given only when the
+	/// session heard more than one speaker), each turn is its own line, `"<label>: <text>"`.
+	public static func text(of lines: [NotesTranscriptLine], labels: ((Int) -> String?)? = nil) -> String {
+		guard let labels else {
+			return lines
+				.map { $0.isGap ? gapMarker : ($0.text ?? "") }
+				.filter { !$0.isEmpty }
+				.joined(separator: " ")
+		}
+		return lines
+			.flatMap { $0.labelled(labels) }
 			.filter { !$0.isEmpty }
-			.joined(separator: " ")
+			.joined(separator: "\n")
 	}
 
 	/// One paragraph per chunk, as the Transcript tab shows it and the transcript editor edits it.
 	public var paragraphs: String {
+		paragraphs()
+	}
+
+	/// Without `labels`, one paragraph per chunk; with them, one per turn, `"<label>: <text>"`, which `edited`
+	/// reads back.
+	public func paragraphs(labels: ((Int) -> String?)? = nil) -> String {
 		lines
-			.map { $0.isGap ? Self.gapMarker : ($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+			.flatMap { line -> [String] in
+				guard let labels else {
+					return [line.isGap ? Self.gapMarker : (line.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)]
+				}
+				return line.labelled(labels)
+			}
 			.filter { !$0.isEmpty }
 			.joined(separator: "\n\n")
 	}
 
+	/// One entry per speaker turn (unlabelled chunks and gaps have no speaker), in the order of `paragraphs(labels:)`.
+	public var speakerParagraphs: [NotesTranscriptParagraph] {
+		lines.flatMap { line -> [NotesTranscriptParagraph] in
+			if line.isGap { return [NotesTranscriptParagraph(speaker: nil, text: Self.gapMarker)] }
+			guard let turns = line.turns else {
+				return [NotesTranscriptParagraph(speaker: nil, text: (line.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))]
+			}
+			return turns.map {
+				NotesTranscriptParagraph(
+					speaker: $0.speaker, text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), overlapping: $0.isOverlapping
+				)
+			}
+		}
+		.filter { !$0.text.isEmpty }
+	}
+
 	/// The transcript after `paragraphs` was edited. Paragraphs take the chunk numbers of the shown lines in
 	/// order (extra ones are numbered after the last chunk); one left as the gap marker stays a gap. Chunks
-	/// that had no text are dropped: the session is finished, so nothing will be added to them.
-	public func edited(_ text: String) -> NotesTranscript {
+	/// that had no text are dropped: the session is finished, so nothing will be added to them. A paragraph
+	/// that starts with a label of a speaker in `registry` (`"You: "`, `"Speaker 2: "`) becomes a line with
+	/// one turn of that speaker; any other paragraph is an unlabelled line.
+	public func edited(_ text: String, registry: SpeakerRegistry? = nil) -> NotesTranscript {
 		let paragraphs = text
 			.replacingOccurrences(of: "\r\n", with: "\n")
 			.components(separatedBy: "\n\n")
@@ -91,9 +181,28 @@ public struct NotesTranscript: Equatable, Sendable {
 			numbers.append(next)
 			next += 1
 		}
+		var speakers: [String: Int] = [:]
+		for speaker in registry?.speakers ?? [] where speakers[registry!.label(speaker.id)] == nil {
+			speakers[registry!.label(speaker.id)] = speaker.id
+		}
 		return NotesTranscript(lines: zip(numbers, paragraphs).map { chunk, paragraph in
-			paragraph == Self.gapMarker ? .gap(chunk: chunk) : NotesTranscriptLine(chunk: chunk, text: paragraph)
+			if paragraph == Self.gapMarker { return .gap(chunk: chunk) }
+			if let (speaker, rest) = Self.speakerAndText(paragraph, speakers: speakers) {
+				return NotesTranscriptLine(chunk: chunk, turns: [NotesTranscriptTurn(speaker: speaker, text: rest)])
+			}
+			return NotesTranscriptLine(chunk: chunk, text: paragraph)
 		})
+	}
+
+	/// The speaker and text of `"<label>: <text>"`, for a label of up to 40 characters (no colon or line
+	/// break) that names one of `speakers`.
+	static func speakerAndText(_ paragraph: String, speakers: [String: Int]) -> (Int, String)? {
+		guard !speakers.isEmpty, let colon = paragraph.range(of: ": ") else { return nil }
+		let label = paragraph[..<colon.lowerBound]
+		guard (1 ... 40).contains(label.count), !label.contains(":"), !label.contains("\n"),
+		      let speaker = speakers[String(label)] else { return nil }
+		let rest = paragraph[colon.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+		return rest.isEmpty ? nil : (speaker, rest)
 	}
 
 	public static func wordCount(_ text: String) -> Int {

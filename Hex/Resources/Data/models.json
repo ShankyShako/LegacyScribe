@@ -5,7 +5,8 @@
     "size": "English",
     "accuracyStars": 5,
     "speedStars": 4,
-    "storageSize": "1.4GB"
+    "storageSize": "1.4GB",
+    "minMemoryGB": 8
   },
   {
     "displayName": "Parakeet TDT v2",

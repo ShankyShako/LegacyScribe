@@ -17,6 +17,8 @@ struct NotesSessionSummary: Equatable, Identifiable, Sendable {
 	var progress: NotesProgress?
 	/// Recorded time, from the chunk count (each chunk is 20–30 s).
 	var approximateSeconds: TimeInterval
+	/// Speakers heard (`SpeakerRegistry.speakerCount`); labels show only when it is over 1.
+	var speakerCount: Int = 0
 }
 
 struct NotesProgress: Equatable, Sendable {
@@ -27,6 +29,21 @@ struct NotesProgress: Equatable, Sendable {
 struct NotesContent: Equatable, Sendable {
 	var notes: String?
 	var transcript: String
+	/// Speakers heard. Over 1, `transcript` has a `"<label>: "` paragraph per speaker turn.
+	var speakerCount: Int = 0
+	/// The transcript's paragraphs with their speakers, for the Transcript tab; empty unless `speakerCount > 1`.
+	var speakerParagraphs: [NotesSpeakerParagraph] = []
+}
+
+/// One paragraph of a labelled transcript as the Transcript tab draws it.
+struct NotesSpeakerParagraph: Equatable, Sendable {
+	/// Nil for an unlabelled chunk or a gap.
+	var speaker: Int?
+	var label: String?
+	/// The user's own voiceprint speaker ("You").
+	var isUser: Bool
+	var text: String
+	var overlapping: Bool
 }
 
 enum NotesEvent: Equatable, Sendable {
@@ -78,6 +95,13 @@ struct NotesClient {
 	var list: @Sendable () async -> [NotesSessionSummary] = { [] }
 	var content: @Sendable (_ id: String) async -> NotesContent = { _ in NotesContent(notes: nil, transcript: "") }
 	var delete: @Sendable (_ id: String) async throws -> Void
+	/// Learns the user's voiceprint from these History entries' recordings and saves it, replacing any earlier
+	/// one. `progress` gets the fraction of recordings done.
+	var enrolVoiceprint: @Sendable (_ history: [Transcript], _ progress: @escaping @Sendable (Double) -> Void) async throws -> Voiceprint
+	/// The user's voiceprint, if one was learned.
+	var voiceprint: @Sendable () async -> Voiceprint? = { nil }
+	/// Forgets the user's voiceprint. Notes and transcripts are untouched.
+	var deleteVoiceprint: @Sendable () async throws -> Void
 }
 
 extension NotesClient: DependencyKey {
@@ -94,7 +118,10 @@ extension NotesClient: DependencyKey {
 			saveTranscript: { try await engine.saveTranscript($0, text: $1) },
 			list: { await engine.list() },
 			content: { await engine.content($0) },
-			delete: { try await engine.delete($0) }
+			delete: { try await engine.delete($0) },
+			enrolVoiceprint: { try await engine.enrolVoiceprint(history: $0, progress: $1) },
+			voiceprint: { await engine.voiceprint() },
+			deleteVoiceprint: { try await engine.deleteVoiceprint() }
 		)
 	}
 }
@@ -141,6 +168,12 @@ actor NotesEngine {
 	private let cohere = CohereClient()
 	private let cohereModel = CohereModel.fourBit.identifier
 	private let voice = NotesVoiceDetector()
+	/// Splits chunks by speaker when `notesSpeakerLabels` is on.
+	private let speakers = NotesSpeakerSplitter()
+	/// Each unfinished session's speakers, mirrored in its `speakers.json`.
+	private var registries: [String: SpeakerRegistry] = [:]
+	/// Sessions whose speaker split already failed once (logged once, then unlabelled quietly).
+	private var speakerFailureLogged: Set<String> = []
 	/// Silence in the recording session, and whether the app was already told to stop it.
 	private var silence = NotesSilenceWatch()
 	private var silenceReported = false
@@ -179,6 +212,20 @@ actor NotesEngine {
 
 	private func folder(_ id: String) -> NotesSessionFolder {
 		NotesSessionFolder(URL.notesFolderURL.appending(component: id, directoryHint: .isDirectory))
+	}
+
+	private var voiceprints: VoiceprintStore {
+		VoiceprintStore(directory: .voiceprintsFolderURL)
+	}
+
+	/// A new session's speakers: the stored voiceprints, the user's first ("You").
+	private func seededRegistry() -> SpeakerRegistry {
+		SpeakerRegistry(voiceprints: voiceprints.all())
+	}
+
+	/// The session's speakers: in memory while it is unfinished, else from `speakers.json`.
+	private func registry(_ id: String) -> SpeakerRegistry? {
+		registries[id] ?? folder(id).loadSpeakers()
 	}
 
 	nonisolated func wake() {
@@ -223,13 +270,21 @@ actor NotesEngine {
 		capturingID = id
 		sessions[id] = session
 		transcripts[id] = NotesTranscript()
+		registries[id] = seededRegistry()
 		silence = NotesSilenceWatch()
 		silenceReported = false
-		Task { [voice, logger] in
+		let labelSpeakers = hexSettings.notesSpeakerLabels
+		Task { [voice, speakers, logger] in
 			do {
 				try await voice.prepare()
 			} catch {
 				logger.error("Notes speech detector unavailable, chunks are transcribed whole: \(error.localizedDescription, privacy: .public)")
+			}
+			guard labelSpeakers else { return }
+			do {
+				try await speakers.prepare()
+			} catch {
+				logger.error("Notes speaker model unavailable, the transcript stays unlabelled: \(error.localizedDescription, privacy: .public)")
 			}
 		}
 		startWorker()
@@ -279,6 +334,7 @@ actor NotesEngine {
 		capturingID = nil
 		sessions[id] = nil
 		transcripts[id] = nil
+		registries[id] = nil
 		progress[id] = nil
 		FileManager.default.removeItemIfExists(at: folder(id).url)
 		logger.notice("Notes session \(id, privacy: .public) discarded")
@@ -359,28 +415,54 @@ actor NotesEngine {
 		}
 
 		let samples = (try? Data(contentsOf: url)).flatMap(PCM16WAV.samples(from:))
-		let line: NotesTranscriptLine
-		var spoke = false
+		var line: NotesTranscriptLine
+		var spoke: Bool
+		var registry: SpeakerRegistry?
 		switch await audioToTranscribe(samples, url: url, chunk: chunk) {
 		case .silent:
 			line = NotesTranscriptLine(chunk: chunk, text: "")
-		case let .audio(source):
-			defer { if source != url { FileManager.default.removeItemIfExists(at: source) } }
-			if let text = await transcribeWithRetry(source, chunk: chunk) {
-				if NotesSpeech.looksLooped(text) {
-					logger.notice("Notes chunk \(chunk) dropped: the same words over and over (\(NotesTranscript.wordCount(text)) words)")
-					line = NotesTranscriptLine(chunk: chunk, text: "")
-				} else {
-					line = NotesTranscriptLine(chunk: chunk, text: text)
-					spoke = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+			spoke = false
+		case .whole:
+			(line, spoke) = await transcribeLine(url, chunk: chunk)
+		case let .speech(chunkSamples, ranges, joined):
+			if hexSettings.notesSpeakerLabels,
+			   let turns = await speakerTurns(id, samples: chunkSamples, speech: ranges, chunk: chunk),
+			   let result = await transcribeTurns(turns, samples: chunkSamples, id: id, chunk: chunk) {
+				switch result {
+				case .gap:
+					line = .gap(chunk: chunk)
+					spoke = true
+				case let .line(turnsLine, updated):
+					line = turnsLine
+					spoke = !(turnsLine.turns ?? []).isEmpty
+					registry = updated
 				}
 			} else {
-				line = .gap(chunk: chunk)
-				spoke = true
+				let speechURL = FileManager.default.temporaryDirectory.appending(component: "notes-speech-\(UUID().uuidString).wav")
+				defer { FileManager.default.removeItemIfExists(at: speechURL) }
+				do {
+					try PCM16WAV.data(samples: joined).write(to: speechURL)
+					(line, spoke) = await transcribeLine(speechURL, chunk: chunk)
+				} catch {
+					logger.error("Notes chunk \(chunk) speech not written, transcribing all of it: \(error.localizedDescription, privacy: .public)")
+					(line, spoke) = await transcribeLine(url, chunk: chunk)
+				}
 			}
 		}
 		// The session may have been deleted while Cohere ran.
 		guard sessions[id] != nil else { return }
+		// Speakers are saved before the transcript: a registry ahead of the transcript is harmless, one
+		// behind it would renumber speakers after a crash.
+		if let registry, registry != registries[id] {
+			do {
+				try folder.saveSpeakers(registry)
+			} catch {
+				logger.error("Notes speakers of \(id, privacy: .public) not saved: \(error.localizedDescription, privacy: .public)")
+				park(id, error: "The transcript couldn't be saved: \(error.localizedDescription)")
+				return
+			}
+			registries[id] = registry
+		}
 		if id == capturingID, !silenceReported,
 		   silence.record(seconds: Double(samples?.count ?? 0) / Double(NotesChunker.sampleRate), speech: spoke) {
 			silenceReported = true
@@ -411,17 +493,19 @@ actor NotesEngine {
 		events.yield(.changed(id))
 	}
 
-	private enum ChunkAudio: Equatable {
+	private enum ChunkAudio {
 		/// Nothing worth transcribing.
 		case silent
-		/// The file to give Cohere: a temporary file with only the speech, or the chunk itself.
-		case audio(URL)
+		/// Transcribe the chunk file as it is (the detector or the file couldn't be read).
+		case whole
+		/// The chunk's samples, the speech in them, and that speech joined.
+		case speech([Float], ranges: [Range<Int>], joined: [Float])
 	}
 
 	/// The chunk's speech only, so Cohere never sees long silence. The whole chunk when the detector or the
 	/// file can't be read, so a detector problem never costs speech.
 	private func audioToTranscribe(_ samples: [Float]?, url: URL, chunk: Int) async -> ChunkAudio {
-		guard let samples else { return .audio(url) }
+		guard let samples else { return .whole }
 		if NotesChunker.isSilent(samples) { return .silent }
 		do {
 			let ranges = try await voice.speechRanges(in: samples)
@@ -429,12 +513,98 @@ actor NotesEngine {
 				logger.notice("Notes chunk \(chunk): no speech")
 				return .silent
 			}
-			let speechURL = FileManager.default.temporaryDirectory.appending(component: "notes-speech-\(UUID().uuidString).wav")
-			try PCM16WAV.data(samples: speech).write(to: speechURL)
-			return .audio(speechURL)
+			return .speech(samples, ranges: ranges, joined: speech)
 		} catch {
 			logger.error("Notes chunk \(chunk) speech detection failed, transcribing all of it: \(error.localizedDescription, privacy: .public)")
-			return .audio(url)
+			return .whole
+		}
+	}
+
+	/// The chunk as one unlabelled line, and whether anything was said. Nil text after two tries → a gap.
+	private func transcribeLine(_ source: URL, chunk: Int) async -> (NotesTranscriptLine, Bool) {
+		guard let text = await transcribeWithRetry(source, chunk: chunk) else { return (.gap(chunk: chunk), true) }
+		if NotesSpeech.looksLooped(text) {
+			logger.notice("Notes chunk \(chunk) dropped: the same words over and over (\(NotesTranscript.wordCount(text)) words)")
+			return (NotesTranscriptLine(chunk: chunk, text: ""), false)
+		}
+		return (NotesTranscriptLine(chunk: chunk, text: text), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+	}
+
+	/// The chunk's speaker turns; nil (transcribe it unlabelled) when the diarizer fails or finds none.
+	private func speakerTurns(_ id: String, samples: [Float], speech: [Range<Int>], chunk: Int) async -> [NotesTurn]? {
+		do {
+			let turns = NotesTurns.turns(from: try await speakers.segments(in: samples), speech: speech)
+			if turns.isEmpty { logger.notice("Notes chunk \(chunk): no speaker turns, transcribed unlabelled") }
+			return turns.isEmpty ? nil : turns
+		} catch {
+			if speakerFailureLogged.insert(id).inserted {
+				logger.error("Notes speaker split failed for \(id, privacy: .public), chunks stay unlabelled: \(error.localizedDescription, privacy: .public)")
+			}
+			return nil
+		}
+	}
+
+	private enum TurnsResult {
+		/// A turn failed twice: the whole chunk becomes a gap, as an unlabelled chunk would.
+		case gap
+		/// The line and the session's speakers after it.
+		case line(NotesTranscriptLine, SpeakerRegistry)
+	}
+
+	/// Transcribes each turn on its own and gives it a session speaker. Turns with no text, or looping text,
+	/// are dropped (and assign no speaker); neighbouring turns of one speaker are joined. Nil when a turn's
+	/// audio can't be written, so the chunk is transcribed unlabelled instead.
+	private func transcribeTurns(_ turns: [NotesTurn], samples: [Float], id: String, chunk: Int) async -> TurnsResult? {
+		var registry = registries[id] ?? seededRegistry()
+		var kept: [NotesTranscriptTurn] = []
+		for turn in turns {
+			guard let audio = NotesSpeech.joined(samples, ranges: turn.speech) else { continue }
+			let turnURL = FileManager.default.temporaryDirectory.appending(component: "notes-turn-\(UUID().uuidString).wav")
+			defer { FileManager.default.removeItemIfExists(at: turnURL) }
+			do {
+				try PCM16WAV.data(samples: audio).write(to: turnURL)
+			} catch {
+				logger.error("Notes chunk \(chunk) turn not written, transcribing unlabelled: \(error.localizedDescription, privacy: .public)")
+				return nil
+			}
+			guard let text = await transcribeWithRetry(turnURL, chunk: chunk) else { return .gap }
+			let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+			guard !trimmed.isEmpty else { continue }
+			if NotesSpeech.looksLooped(trimmed) {
+				logger.notice("Notes chunk \(chunk) turn dropped: the same words over and over (\(NotesTranscript.wordCount(trimmed)) words)")
+				continue
+			}
+			// A short turn that matches no one goes to the speaker before it: in this chunk, else the last one.
+			let neighbour = kept.last?.speaker ?? transcripts[id]?.lines.last(where: { $0.turns != nil })?.turns?.last?.speaker
+			let speaker = registry.assign(
+				turn.embedding, seconds: Double(turn.speechSamples) / Double(NotesChunker.sampleRate), neighbour: neighbour
+			)
+			var overlapping = turn.overlapping
+			if !overlapping { overlapping = await userTalksOver(audio, speaker: speaker, registry: registry, chunk: chunk) }
+			if let last = kept.last, last.speaker == speaker {
+				kept[kept.count - 1].text += " " + trimmed
+				if overlapping { kept[kept.count - 1].overlapping = true }
+			} else {
+				kept.append(NotesTranscriptTurn(speaker: speaker, text: trimmed, overlapping: overlapping))
+			}
+		}
+		logger.notice("Notes chunk \(chunk): \(turns.count) turns, speakers \(kept.map { "\($0.speaker)\($0.isOverlapping ? "+" : "")" }.joined(separator: ","), privacy: .public)")
+		return .line(NotesTranscriptLine(chunk: chunk, turns: kept), registry)
+	}
+
+	/// Whether the user's voiceprint is heard in a turn given to someone else (`SpeakerOverlap`): the user
+	/// talking over them. False without a voiceprint, for the user's own turns, and when scoring fails.
+	private func userTalksOver(_ audio: [Float], speaker: Int, registry: SpeakerRegistry, chunk: Int) async -> Bool {
+		guard let user = registry.speakers.first(where: { $0.voiceprintID == Voiceprint.userID }), user.id != speaker else {
+			return false
+		}
+		let windows = SpeakerOverlap.windows(sampleCount: audio.count)
+		guard !windows.isEmpty else { return false }
+		do {
+			return SpeakerOverlap.userHeard(try await speakers.scores(audio, windows: windows, against: user.embedding))
+		} catch {
+			logger.error("Notes chunk \(chunk) overlap check failed: \(error.localizedDescription, privacy: .public)")
+			return false
 		}
 	}
 
@@ -460,6 +630,8 @@ actor NotesEngine {
 		let transcript = transcripts[id] ?? folder.transcript.load()
 		// Sessions transcribed before the loop check (or edited back in) may still hold looped chunks.
 		let pieces = NotesPrompts.pieces(transcript.lines.filter { !NotesSpeech.looksLooped($0.text ?? "") })
+		// Labels only when more than one speaker was heard, so a solo session's notes are written as before.
+		let labels = registry(id)?.transcriptLabels
 		let model = (hexSettings.notesWriter == .onDevice ? hexSettings.notesLocalModel : hexSettings.notesModel)
 			.trimmingCharacters(in: .whitespaces)
 		let saved = folder.savedParts()
@@ -475,7 +647,8 @@ actor NotesEngine {
 					continue
 				}
 				let messages = NotesPrompts.pieceMessages(
-					NotesTranscript.text(of: piece), part: number, of: pieces.count, vocabulary: hexSettings.vocabulary
+					NotesTranscript.text(of: piece, labels: labels), part: number, of: pieces.count,
+					vocabulary: hexSettings.vocabulary, speakerLabels: labels != nil
 				)
 				let text = try await chat(messages, model: model, maxTokens: Self.pieceMaxTokens)
 				guard sessions[id] != nil else { return }
@@ -515,6 +688,7 @@ actor NotesEngine {
 		}
 		sessions[id] = nil
 		transcripts[id] = nil
+		registries[id] = nil
 		progress[id] = nil
 		logger.notice("Notes for \(id, privacy: .public) written")
 		events.yield(.changed(id))
@@ -606,6 +780,8 @@ actor NotesEngine {
 			session.notesError = nil
 			sessions[id] = session
 			transcripts[id] = transcript
+			// Missing (recorded before labels, or no turn yet): later chunks may add numbers, which is fine.
+			registries[id] = folder.loadSpeakers() ?? seededRegistry()
 			update(id) { _ in }
 			logger.notice("Notes session \(id, privacy: .public) resumed at \(plan.stage.rawValue, privacy: .public), \(plan.queue.count) chunks pending")
 		}
@@ -649,16 +825,31 @@ actor NotesEngine {
 				words: NotesTranscript.wordCount(transcript.text),
 				progress: progress[id],
 				approximateSeconds: session.endedAt.map { $0.timeIntervalSince(session.startedAt) }
-					?? Double(chunks) * Double(NotesChunker.maxSeconds + NotesChunker.minSeconds) / 2
+					?? Double(chunks) * Double(NotesChunker.maxSeconds + NotesChunker.minSeconds) / 2,
+				speakerCount: registry(id)?.speakerCount ?? 0
 			)
 		}
 	}
 
 	func content(_ id: String) -> NotesContent {
 		let folder = folder(id)
+		let registry = registry(id)
+		let transcript = transcripts[id] ?? folder.transcript.load()
+		let labels = registry?.transcriptLabels
 		return NotesContent(
 			notes: try? String(contentsOf: folder.notesURL, encoding: .utf8),
-			transcript: (transcripts[id] ?? folder.transcript.load()).paragraphs
+			transcript: transcript.paragraphs(labels: labels),
+			speakerCount: registry?.speakerCount ?? 0,
+			speakerParagraphs: labels == nil ? [] : transcript.speakerParagraphs.map { paragraph in
+				let speaker = paragraph.speaker.flatMap { registry?.speaker($0) }
+				return NotesSpeakerParagraph(
+					speaker: speaker?.id,
+					label: speaker.map { registry!.label($0.id) },
+					isUser: speaker?.voiceprintID == Voiceprint.userID,
+					text: paragraph.text,
+					overlapping: paragraph.overlapping
+				)
+			}
 		)
 	}
 
@@ -669,7 +860,7 @@ actor NotesEngine {
 		// Only once the transcript is complete and no notes are being written from it.
 		let idle = sessions[id] == nil || parked.contains(id)
 		guard idle, session.stage == .done || session.stage == .noting else { throw NotesError.writingNotes }
-		let transcript = (transcripts[id] ?? folder.transcript.load()).edited(text)
+		let transcript = (transcripts[id] ?? folder.transcript.load()).edited(text, registry: registry(id))
 		try folder.transcript.commitEdit(transcript)
 		if sessions[id] != nil { transcripts[id] = transcript }
 		// Parts written from the old transcript must not be reused.
@@ -684,11 +875,33 @@ actor NotesEngine {
 		guard id != capturingID else { throw NotesError.recordingNow }
 		sessions[id] = nil
 		transcripts[id] = nil
+		registries[id] = nil
 		parked.remove(id)
 		progress[id] = nil
 		try FileManager.default.removeItem(at: folder(id).url)
 		logger.notice("Notes session \(id, privacy: .public) deleted")
 		events.yield(.changed(id))
+	}
+
+	// MARK: - Voiceprint
+
+	func enrolVoiceprint(history: [Transcript], progress: @escaping @Sendable (Double) -> Void) async throws -> Voiceprint {
+		try await VoiceprintEnroller(store: voiceprints, splitter: speakers, voice: voice).enrolUser(history: history, progress: progress)
+	}
+
+	/// Enrols from recording files directly (the harness, which has no History of its own).
+	func enrolVoiceprint(recordings: [URL]) async throws -> Voiceprint {
+		try await VoiceprintEnroller(store: voiceprints, splitter: speakers, voice: voice)
+			.enrolUser(recordings: VoiceprintEnroller.spread(recordings, count: VoiceprintEnroller.maxSources))
+	}
+
+	func voiceprint() -> Voiceprint? {
+		voiceprints.load(Voiceprint.userID)
+	}
+
+	func deleteVoiceprint() throws {
+		try voiceprints.delete(Voiceprint.userID)
+		logger.notice("Voiceprint deleted")
 	}
 
 	private static func sessionIDs() -> [String] {

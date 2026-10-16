@@ -354,7 +354,10 @@ private struct LocalModelRow: View {
 	@Bindable var store: StoreOf<SettingsFeature>
 	let role: RewriteEndpointRole
 	let model: LocalLLMModel
+	@State private var machine: MachineProbe?
 
+	/// A model already downloaded stays usable; only a download is checked against this Mac.
+	private var fit: ModelFit.Verdict { isDownloaded ? .fits : model.fit(on: machine) }
 	private var isDownloaded: Bool { store.localModelsDownloaded.contains(model) }
 	private var isSelected: Bool { store.hexSettings.endpoint(for: role).model == model.repository }
 
@@ -366,7 +369,9 @@ private struct LocalModelRow: View {
 			VStack(alignment: .leading, spacing: 2) {
 				HStack(spacing: 6) {
 					Text(model.displayName)
-					if model == .recommended {
+					if fit.reason != nil {
+						WontFitBadge()
+					} else if model == .recommended {
 						Text("Recommended")
 							.font(.caption2)
 							.padding(.horizontal, 5)
@@ -382,6 +387,9 @@ private struct LocalModelRow: View {
 				}
 			}
 			Spacer()
+			if let reason = fit.reason {
+				WontFitInfoButton(reason: reason)
+			}
 			if store.localModelProgress[model] != nil {
 				Button("Cancel") { store.send(.cancelLocalModelDownload(model)) }
 			} else if isDownloaded {
@@ -398,8 +406,12 @@ private struct LocalModelRow: View {
 			} else {
 				Button("Download") { store.send(.downloadLocalModel(model)) }
 					.buttonStyle(.borderedProminent)
+					.disabled(fit.reason != nil)
+					.help(fit.reason ?? "")
 			}
 		}
+		.opacity(fit.reason != nil ? 0.55 : 1)
+		.onAppear { machine = MachineProbe.current() }
 		.contentShape(Rectangle())
 		.onTapGesture { if isDownloaded { select() } }
 	}

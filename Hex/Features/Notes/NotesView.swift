@@ -160,9 +160,13 @@ private struct NotesSessionDetail: View {
 							Text(placeholder).foregroundStyle(.secondary)
 						}
 					case .transcript:
-						Text(content.transcript.isEmpty ? "Nothing transcribed yet." : content.transcript)
-							.textSelection(.enabled)
-							.foregroundStyle(content.transcript.isEmpty ? .secondary : .primary)
+						if content.speakerCount > 1, !content.speakerParagraphs.isEmpty {
+							NotesSpeakerTranscript(paragraphs: content.speakerParagraphs)
+						} else {
+							Text(content.transcript.isEmpty ? "Nothing transcribed yet." : content.transcript)
+								.textSelection(.enabled)
+								.foregroundStyle(content.transcript.isEmpty ? .secondary : .primary)
+						}
 					}
 				} else {
 					ProgressView().controlSize(.small)
@@ -188,7 +192,7 @@ private struct NotesSessionDetail: View {
 				VStack(alignment: .leading, spacing: 2) {
 					Text(summary.session.startedAt.formatted(date: .complete, time: .shortened))
 						.font(.headline)
-					Text(NotesStatusText.line(summary) + gapsText)
+					Text(NotesStatusText.line(summary) + gapsText + speakersText)
 						.font(.callout)
 						.foregroundStyle(.secondary)
 				}
@@ -226,6 +230,10 @@ private struct NotesSessionDetail: View {
 		case 1: " · 1 gap"
 		default: " · \(summary.gaps) gaps"
 		}
+	}
+
+	private var speakersText: String {
+		summary.speakerCount > 1 ? " · \(summary.speakerCount) speakers" : ""
 	}
 
 	@ViewBuilder
@@ -380,8 +388,21 @@ private struct NotesIntroView: View {
 			} header: {
 				Text("Settings")
 			}
+
+			speakersSection
 		}
 		.formStyle(.grouped)
+		.confirmationDialog(
+			"Forget your voice?",
+			isPresented: Binding(
+				get: { store.confirmingForgetVoice },
+				set: { if !$0 { store.confirmingForgetVoice = false } }
+			)
+		) {
+			Button("Forget", role: .destructive) { store.send(.confirmForgetVoice) }
+		} message: {
+			Text("New sessions won't label you as \"You\" until your voice is learned again. Your notes and transcripts are untouched.")
+		}
 		.onAppear {
 			ollamaURL = store.hexSettings.notesOllamaURL
 			model = store.hexSettings.notesModel
@@ -389,6 +410,62 @@ private struct NotesIntroView: View {
 		.onDisappear {
 			saveFields()
 		}
+	}
+
+	private var speakersSection: some View {
+		Section {
+			Label {
+				Toggle("Label who is speaking", isOn: Binding(
+					get: { store.hexSettings.notesSpeakerLabels },
+					set: { store.send(.setSpeakerLabels($0)) }
+				))
+				Text("Shown only when a session heard more than one voice. Everything stays on this Mac.")
+					.settingsCaption()
+			} icon: {
+				Image(systemName: "person.2")
+			}
+			Label {
+				LabeledContent("Your voice") {
+					Text(voiceStatus)
+				}
+			} icon: {
+				Image(systemName: "waveform")
+			}
+			Label {
+				if let fraction = store.voiceLearning {
+					HStack(spacing: 8) {
+						ProgressView(value: fraction)
+							.controlSize(.small)
+						Text("Learning from your dictations…")
+							.foregroundStyle(.secondary)
+							.fixedSize()
+					}
+				} else {
+					HStack(spacing: 8) {
+						Button("Learn from my dictations") { store.send(.learnVoice) }
+						Button("Forget") { store.send(.requestForgetVoice) }
+							.disabled(store.voiceprint == nil)
+					}
+				}
+				if let error = store.voiceError {
+					Text(error)
+						.settingsCaption()
+						.foregroundStyle(.orange)
+				}
+			} icon: {
+				Image(systemName: "person.crop.circle.badge.checkmark")
+			}
+			Text("Forget removes only the voice sample. Your notes and transcripts are untouched.")
+				.settingsCaption()
+		} header: {
+			Text("Speakers")
+		}
+	}
+
+	private var voiceStatus: String {
+		guard let voiceprint = store.voiceprint else { return "Not learned yet" }
+		let date = voiceprint.enrolledAt.formatted(.dateTime.month(.abbreviated).day())
+		return "Learned from \(voiceprint.sourceCount) dictations on \(date)"
 	}
 
 	private func saveFields() {
@@ -406,6 +483,91 @@ private struct NotesIntroView: View {
 		panel.prompt = "Export here"
 		guard panel.runModal() == .OK, let url = panel.url else { return }
 		store.send(.setExportFolder(url))
+	}
+}
+
+/// A labelled transcript (option C, DESIGN.md "Notes speaker labels"): a tinted chip per speaker in a left
+/// column, the text beside it. "You" is in the accent colour, everyone else in a muted tint fixed by their
+/// number; an overlapping turn gets a note under its text.
+struct NotesSpeakerTranscript: View {
+	var paragraphs: [NotesSpeakerParagraph]
+
+	static let chipWidth: CGFloat = 80
+
+	/// Muted tints for speakers other than the user, by speaker number (2 is the first).
+	static let tints: [Color] = [
+		Color(red: 0.55, green: 0.42, blue: 0.62), // violet
+		Color(red: 0.78, green: 0.52, blue: 0.20), // amber
+		Color(red: 0.24, green: 0.55, blue: 0.55), // teal
+		Color(red: 0.72, green: 0.36, blue: 0.42), // rose
+		Color(red: 0.42, green: 0.55, blue: 0.28), // olive
+		Color(red: 0.38, green: 0.47, blue: 0.68), // slate blue
+		Color(red: 0.58, green: 0.45, blue: 0.35), // brown
+	]
+
+	static func tint(_ speaker: Int) -> Color {
+		tints[((speaker - 2) % tints.count + tints.count) % tints.count]
+	}
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 12) {
+			ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+				row(paragraph)
+			}
+		}
+		.textSelection(.enabled)
+	}
+
+	private func row(_ paragraph: NotesSpeakerParagraph) -> some View {
+		HStack(alignment: .firstTextBaseline, spacing: 10) {
+			chip(paragraph)
+				.frame(width: Self.chipWidth)
+			VStack(alignment: .leading, spacing: 4) {
+				if paragraph.text == NotesTranscript.gapMarker {
+					Text(paragraph.text).italic().foregroundStyle(.secondary)
+				} else {
+					Text(paragraph.text)
+				}
+				if paragraph.overlapping {
+					Label("Overlapping voices", systemImage: "waveform.badge.exclamationmark")
+						.labelStyle(OverlapLabelStyle())
+						.font(.caption)
+						.foregroundStyle(.secondary)
+						.padding(.horizontal, 6)
+						.padding(.vertical, 1)
+						.overlay(Capsule().strokeBorder(.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 0.8, dash: [3, 2])))
+						.help("Someone else was talking at the same time, so this text may mix two voices.")
+				}
+			}
+			.frame(maxWidth: .infinity, alignment: .leading)
+		}
+		.accessibilityElement(children: .combine)
+	}
+
+	@ViewBuilder
+	private func chip(_ paragraph: NotesSpeakerParagraph) -> some View {
+		if let speaker = paragraph.speaker, let label = paragraph.label {
+			Text(label)
+				.font(.caption.weight(.semibold))
+				.lineLimit(1)
+				.minimumScaleFactor(0.8)
+				.foregroundStyle(paragraph.isUser ? Color.white : Self.tint(speaker))
+				.padding(.horizontal, 8)
+				.padding(.vertical, 2)
+				.frame(maxWidth: .infinity)
+				.background(Capsule().fill(paragraph.isUser ? Color.accentColor : Self.tint(speaker).opacity(0.16)))
+		} else {
+			Color.clear.frame(height: 1)
+		}
+	}
+
+	private struct OverlapLabelStyle: LabelStyle {
+		func makeBody(configuration: Configuration) -> some View {
+			HStack(spacing: 3) {
+				configuration.icon
+				configuration.title
+			}
+		}
 	}
 }
 

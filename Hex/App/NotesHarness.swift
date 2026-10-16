@@ -9,6 +9,7 @@ import HexCore
 ///
 ///     "LegacyScribe Debug" --notes-harness record <file.wav> [--speed 20]
 ///     "LegacyScribe Debug" --notes-harness resume
+///     "LegacyScribe Debug" --notes-harness enrol <folder of recordings>
 ///
 /// Prints one JSON object per line: stage changes, each committed chunk with the process footprint, and
 /// a final summary. Exits 0 once every session is done, 1 on an error.
@@ -56,8 +57,21 @@ enum NotesHarness {
 			case "resume":
 				await engine.resumeUnfinished()
 				await watch(engine)
+			case "enrol":
+				// The user's voiceprint from a folder of recordings (read only), saved under the data root.
+				guard arguments.count >= 2 else { throw HarnessError("enrol needs a folder of recordings") }
+				let folder = URL(fileURLWithPath: arguments[1], isDirectory: true)
+				let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+					.filter { ["wav", "flac", "m4a", "caf"].contains(($0 as NSString).pathExtension.lowercased()) }
+					.sorted()
+				let voiceprint = try await engine.enrolVoiceprint(recordings: names.map { folder.appending(component: $0) })
+				let norm = voiceprint.embedding.reduce(0) { $0 + $1 * $1 }.squareRoot()
+				print(json([
+					"event": "enrolled", "sources": voiceprint.sourceCount, "seconds": voiceprint.sourceSeconds,
+					"dimensions": voiceprint.embedding.count, "norm": norm, "selfScoreMedian": voiceprint.selfScoreMedian,
+				]))
 			default:
-				throw HarnessError("usage: --notes-harness record <file.wav> [--speed N] | resume")
+				throw HarnessError("usage: --notes-harness record <file.wav> [--speed N] | resume | enrol <folder>")
 			}
 			return 0
 		} catch {
@@ -82,6 +96,7 @@ enum NotesHarness {
 					"transcribed": summary.transcribedChunks,
 					"pending": summary.pendingChunks,
 					"gaps": summary.gaps,
+					"speakers": summary.speakerCount,
 					"footprint": NotesEngine.footprint(),
 				]
 				if let progress = summary.progress {

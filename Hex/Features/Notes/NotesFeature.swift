@@ -16,7 +16,14 @@ struct NotesFeature {
 		/// The transcript being edited (one paragraph per chunk); nil when not editing.
 		var transcriptDraft: String?
 		var transcriptError: String?
+		/// The user's voiceprint ("You" in labelled transcripts); nil until learned.
+		var voiceprint: Voiceprint?
+		/// Fraction of recordings done while the voiceprint is being learned; nil otherwise.
+		var voiceLearning: Double?
+		var voiceError: String?
+		var confirmingForgetVoice = false
 		@Shared(.hexSettings) var hexSettings: HexSettings
+		@Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
 
 		var selected: NotesSessionSummary? {
 			sessions.first { $0.id == selectedID }
@@ -58,6 +65,14 @@ struct NotesFeature {
 		case setOllamaURL(String)
 		case setModel(String)
 		case setExportFolder(URL?)
+		case setSpeakerLabels(Bool)
+		case voiceprintLoaded(Voiceprint?)
+		case learnVoice
+		case voiceLearningProgress(Double)
+		case voiceLearned(Voiceprint)
+		case voiceLearningFailed(String)
+		case requestForgetVoice
+		case confirmForgetVoice
 	}
 
 	@Dependency(\.notes) var notes
@@ -73,6 +88,7 @@ struct NotesFeature {
 			case .task:
 				return .merge(
 					.send(.reload),
+					.run { send in await send(.voiceprintLoaded(await notes.voiceprint())) },
 					.run { send in
 						for await event in notes.events() {
 							if case .changed = event { await send(.reload) }
@@ -210,6 +226,68 @@ struct NotesFeature {
 			case let .setExportFolder(url):
 				state.$hexSettings.withLock { $0.notesExportFolder = url?.path(percentEncoded: false) }
 				return .none
+
+			case let .setSpeakerLabels(enabled):
+				state.$hexSettings.withLock { $0.notesSpeakerLabels = enabled }
+				return .none
+
+			case let .voiceprintLoaded(voiceprint):
+				state.voiceprint = voiceprint
+				return .none
+
+			case .learnVoice:
+				guard state.voiceLearning == nil else { return .none }
+				state.voiceLearning = 0
+				state.voiceError = nil
+				let history = state.transcriptionHistory.history
+				return .run { send in
+					let (progress, continuation) = AsyncStream.makeStream(of: Double.self, bufferingPolicy: .bufferingNewest(1))
+					let forward = Task {
+						for await fraction in progress { await send(.voiceLearningProgress(fraction)) }
+					}
+					do {
+						let voiceprint = try await notes.enrolVoiceprint(history) { continuation.yield($0) }
+						continuation.finish()
+						await forward.value
+						await send(.voiceLearned(voiceprint))
+					} catch {
+						continuation.finish()
+						await forward.value
+						HexLog.notes.error("Learning the voiceprint failed: \(error.localizedDescription, privacy: .public)")
+						await send(.voiceLearningFailed(error.localizedDescription))
+					}
+				}
+
+			case let .voiceLearningProgress(fraction):
+				guard state.voiceLearning != nil else { return .none }
+				state.voiceLearning = fraction
+				return .none
+
+			case let .voiceLearned(voiceprint):
+				state.voiceLearning = nil
+				state.voiceprint = voiceprint
+				return .none
+
+			case let .voiceLearningFailed(message):
+				state.voiceLearning = nil
+				state.voiceError = message
+				return .none
+
+			case .requestForgetVoice:
+				state.confirmingForgetVoice = true
+				return .none
+
+			case .confirmForgetVoice:
+				state.confirmingForgetVoice = false
+				state.voiceError = nil
+				return .run { send in
+					do {
+						try await notes.deleteVoiceprint()
+					} catch {
+						HexLog.notes.error("Forgetting the voiceprint failed: \(error.localizedDescription, privacy: .public)")
+					}
+					await send(.voiceprintLoaded(await notes.voiceprint()))
+				}
 			}
 		}
 	}
