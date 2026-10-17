@@ -25,3 +25,8 @@ Local.xcconfig
 
 # Coverage data from running the Debug build directly (notes harness)
 *.profraw
+
+# Recordings stay in the data root, never in the repo
+*.m4a
+*.wav
+*.flac

@@ -46,7 +46,7 @@ struct MicrophoneSelectionSectionView: View {
 						}
 						return "System Default"
 					}()
-					Picker("Input Device", selection: selectedDeviceTag) {
+					Picker("Input device", selection: selectedDeviceTag) {
 						Text(systemLabel).tag(Self.systemDefaultTag)
 						ForEach(store.availableInputDevices) { device in
 							Text(device.name).tag(device.id)
@@ -58,8 +58,9 @@ struct MicrophoneSelectionSectionView: View {
 					.pickerStyle(.menu)
 					.id(pickerIdentity)
 				} icon: {
-					Image(systemName: "mic.circle")
+					Image(systemName: "mic.fill")
 				}
+				.labelStyle(.tile(.red))
 
 				Button(action: {
 					store.send(.loadAvailableInputDevices)
@@ -81,7 +82,7 @@ struct MicrophoneSelectionSectionView: View {
 					get: { store.hexSettings.voiceIsolationEnabled },
 					set: { store.send(.setVoiceIsolationEnabled($0)) }
 				))
-				Text("For noisy places: keeps your voice and turns down people talking around you, echo and noise. Applies to dictation; Notes has its own switch.")
+				Text("Keeps your voice and turns down people and noise around you. Dictation only; Notes has its own switch.")
 					.settingsCaption()
 				if store.hexSettings.voiceIsolationEnabled {
 					HStack {
@@ -91,14 +92,11 @@ struct MicrophoneSelectionSectionView: View {
 					}
 				}
 			} icon: {
-				Image(systemName: "person.wave.2")
+				Image(systemName: "person.wave.2.fill")
 			}
+			.labelStyle(.tile(.blue))
 		} header: {
 			Text("Microphone")
-		} footer: {
-			Text("Override the system default microphone with a specific input device. This setting will persist across sessions.")
-				.font(.footnote)
-				.foregroundColor(.secondary)
 		}
 		.enableInjection()
 	}

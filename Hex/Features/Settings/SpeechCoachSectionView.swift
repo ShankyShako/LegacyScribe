@@ -19,6 +19,7 @@ struct SpeechCoachSectionView: View {
 			} icon: {
 				Image(systemName: "chart.line.downtrend.xyaxis")
 			}
+			.labelStyle(.tile(.pink))
 
 			if store.hexSettings.speechCoachEnabled {
 				Label {
@@ -31,6 +32,7 @@ struct SpeechCoachSectionView: View {
 				} icon: {
 					Image(systemName: "hand.raised")
 				}
+				.labelStyle(.tile(.orange))
 
 				HStack {
 					Button("Open Speech Coach") { store.send(.openSpeechCoach) }

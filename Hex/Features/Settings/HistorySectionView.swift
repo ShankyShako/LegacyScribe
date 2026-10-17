@@ -12,7 +12,7 @@ struct HistorySectionView: View {
 	var body: some View {
 		Section {
 			Label {
-				Toggle("Save Transcription History", isOn: Binding(
+				Toggle("Save history", isOn: Binding(
 					get: { store.hexSettings.saveTranscriptionHistory },
 					set: { store.send(.toggleSaveTranscriptionHistory($0)) }
 				))
@@ -21,11 +21,12 @@ struct HistorySectionView: View {
 			} icon: {
 				Image(systemName: "clock.arrow.circlepath")
 			}
+			.labelStyle(.tile(.blue))
 
 			if store.hexSettings.saveTranscriptionHistory {
 				Label {
 					HStack {
-						Text("Maximum History Entries")
+						Text("Entries to keep")
 						Spacer()
 						Picker("", selection: Binding(
 							get: { store.hexSettings.maxHistoryEntries ?? 0 },
@@ -46,6 +47,7 @@ struct HistorySectionView: View {
 				} icon: {
 					Image(systemName: "number.square")
 				}
+				.labelStyle(.tile(.settingsTileGray))
 
 				if store.hexSettings.maxHistoryEntries != nil {
 					Text("Oldest entries will be automatically deleted when limit is reached")
@@ -80,6 +82,7 @@ struct HistorySectionView: View {
 				} icon: {
 					Image(systemName: "waveform")
 				}
+				.labelStyle(.tile(.purple))
 
 				PasteLastTranscriptHotkeyRow(store: store)
 			}
@@ -106,14 +109,14 @@ private struct PasteLastTranscriptHotkeyRow: View {
 		VStack(alignment: .leading, spacing: 12) {
 			Label {
 				VStack(alignment: .leading, spacing: 2) {
-					Text("Paste Last Transcript")
-						.font(.subheadline.weight(.semibold))
+					Text("Paste last transcript")
 					Text("Assign a shortcut (modifier + key) to instantly paste your last transcription.")
 						.settingsCaption()
 				}
 			} icon: {
 				Image(systemName: "doc.on.clipboard")
 			}
+			.labelStyle(.tile(.orange))
 
 			let key = store.isSettingPasteLastTranscriptHotkey ? nil : pasteHotkey?.key
 			let modifiers = store.isSettingPasteLastTranscriptHotkey ? store.currentPasteLastModifiers : (pasteHotkey?.modifiers ?? .init(modifiers: []))

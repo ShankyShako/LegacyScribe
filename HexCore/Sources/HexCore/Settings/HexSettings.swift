@@ -135,6 +135,11 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var speechCoachEnabled: Bool
 	/// "I stutter": the coach doesn't count repeats or pauses inside sentences against the user.
 	public var coachStutterFriendly: Bool
+	/// The live caption under the indicator while dictating (Apple's streaming recognizer; nothing is kept).
+	public var liveCaptionEnabled: Bool
+	public var liveCaptionPlacement: CaptionPlacement
+	/// Where `.custom` puts the caption, as fractions of the screen's visible frame; nil = the default spot.
+	public var liveCaptionSpot: CaptionSpot?
 
 	/// The mode a push-to-talk dictation is rewritten in: Notes mode dictates in the mode picked before it.
 	public var dictationMode: RewriteMode {
@@ -206,7 +211,10 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		cancelUndoSeconds: Int = 30,
 		rewriteModeBeforeNotes: RewriteMode = .clean,
 		speechCoachEnabled: Bool = false,
-		coachStutterFriendly: Bool = false
+		coachStutterFriendly: Bool = false,
+		liveCaptionEnabled: Bool = true,
+		liveCaptionPlacement: CaptionPlacement = .underIndicator,
+		liveCaptionSpot: CaptionSpot? = nil
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -266,6 +274,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.rewriteModeBeforeNotes = rewriteMode == .notes ? rewriteModeBeforeNotes : rewriteMode
 		self.speechCoachEnabled = speechCoachEnabled
 		self.coachStutterFriendly = coachStutterFriendly
+		self.liveCaptionEnabled = liveCaptionEnabled
+		self.liveCaptionPlacement = liveCaptionPlacement
+		self.liveCaptionSpot = liveCaptionSpot
 		normalizeDoubleTapSettings()
 	}
 
@@ -350,6 +361,9 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case rewriteModeBeforeNotes
 	case speechCoachEnabled
 	case coachStutterFriendly
+	case liveCaptionEnabled
+	case liveCaptionPlacement
+	case liveCaptionSpot
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -532,7 +546,17 @@ private enum HexSettingsSchema {
 		SettingsField(.cancelUndoSeconds, keyPath: \.cancelUndoSeconds, default: defaults.cancelUndoSeconds).eraseToAny(),
 		SettingsField(.rewriteModeBeforeNotes, keyPath: \.rewriteModeBeforeNotes, default: defaults.rewriteModeBeforeNotes).eraseToAny(),
 		SettingsField(.speechCoachEnabled, keyPath: \.speechCoachEnabled, default: defaults.speechCoachEnabled).eraseToAny(),
-		SettingsField(.coachStutterFriendly, keyPath: \.coachStutterFriendly, default: defaults.coachStutterFriendly).eraseToAny()
+		SettingsField(.coachStutterFriendly, keyPath: \.coachStutterFriendly, default: defaults.coachStutterFriendly).eraseToAny(),
+		SettingsField(.liveCaptionEnabled, keyPath: \.liveCaptionEnabled, default: defaults.liveCaptionEnabled).eraseToAny(),
+		SettingsField(.liveCaptionPlacement, keyPath: \.liveCaptionPlacement, default: defaults.liveCaptionPlacement).eraseToAny(),
+		SettingsField(
+			.liveCaptionSpot,
+			keyPath: \.liveCaptionSpot,
+			default: defaults.liveCaptionSpot,
+			encode: { container, key, value in
+				try container.encodeIfPresent(value, forKey: key)
+			}
+		).eraseToAny()
 	]
 }
 

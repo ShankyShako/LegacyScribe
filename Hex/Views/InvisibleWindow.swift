@@ -6,7 +6,50 @@
 //
 
 import AppKit
+import Observation
 import SwiftUI
+
+/// The screen the invisible window covers and the part of it the menu bar and Dock leave free, in the window's
+/// top-left coordinates. The live caption maps its fractional spot into `visibleRect`.
+@MainActor @Observable
+final class VisibleScreen {
+  static let shared = VisibleScreen()
+
+  /// The window's size: the screen's full frame.
+  private(set) var size: CGSize = .zero
+  /// `screen.frame` minus `screen.visibleFrame`: what the menu bar (top) and Dock (a side) take.
+  private(set) var inset = EdgeInsets()
+
+  var visibleRect: CGRect {
+    let size = size == .zero ? (NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900)) : size
+    return CGRect(
+      x: inset.leading,
+      y: inset.top,
+      width: max(1, size.width - inset.leading - inset.trailing),
+      height: max(1, size.height - inset.top - inset.bottom)
+    )
+  }
+
+  func adopt(_ screen: NSScreen) {
+    let frame = screen.frame
+    let visible = screen.visibleFrame
+    adopt(
+      size: frame.size,
+      inset: EdgeInsets(
+        top: max(0, frame.maxY - visible.maxY),
+        leading: max(0, visible.minX - frame.minX),
+        bottom: max(0, visible.minY - frame.minY),
+        trailing: max(0, frame.maxX - visible.maxX)
+      )
+    )
+  }
+
+  func adopt(size newSize: CGSize, inset newInset: EdgeInsets) {
+    // Only a real change notifies: this runs on every mouse move (the Dock can resize or hide meanwhile).
+    if size != newSize { size = newSize }
+    if inset != newInset { inset = newInset }
+  }
+}
 
 /// This allows us to render SwiftUI views anywhere on the screen, without dealing with the awkward
 /// rendering issues that come with normal MacOS windows. Essentially, we create one giant invisible
@@ -108,16 +151,19 @@ class InvisibleWindow: NSPanel {
     guard let screenWithMouse = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) else { return }
     currentScreen = screenWithMouse
     setFrame(screenWithMouse.frame, display: true)
+    VisibleScreen.shared.adopt(screenWithMouse)
   }
 
   private func checkForScreenChange() {
     let mouseLocation = NSEvent.mouseLocation
     guard let newScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) else { return }
     
+    VisibleScreen.shared.adopt(newScreen)
     // Only update if screen actually changed
     if newScreen !== currentScreen {
       currentScreen = newScreen
       setFrame(newScreen.frame, display: true)
+      VisibleScreen.shared.adopt(newScreen)
     }
   }
 

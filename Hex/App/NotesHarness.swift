@@ -10,6 +10,7 @@ import HexCore
 ///     "LegacyScribe Debug" --notes-harness record <file.wav> [--speed 20]
 ///     "LegacyScribe Debug" --notes-harness resume
 ///     "LegacyScribe Debug" --notes-harness enrol <folder of recordings>
+///     "LegacyScribe Debug" --notes-harness taps <file.wav> --script "p; w 0.15; r; ..."   (NotesTapHarness)
 ///
 /// Prints one JSON object per line: stage changes, each committed chunk with the process footprint, and
 /// a final summary. Exits 0 once every session is done, 1 on an error.
@@ -30,6 +31,8 @@ enum NotesHarness {
 	}
 
 	private static func run(_ arguments: [String]) async -> Int32 {
+		// The tap-versus-hold check (`tools/notes-taptest.py`) builds its own engine behind the real reducer.
+		if arguments.first == "taps" { return await NotesTapHarness.run(Array(arguments.dropFirst())) }
 		let engine = NotesEngine()
 		do {
 			switch arguments.first {

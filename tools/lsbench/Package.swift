@@ -14,6 +14,9 @@ let package = Package(
         .package(url: "https://github.com/ShankyShako/mlx-swift.git", revision: "37407d1ca8c3d138e993d5ef84ac48a13793f0dc"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.1.6"),
         .package(path: "../../HexCore"),
+        // Fermion Research's own Phonon-2 runtime (`--engine fermion:phonon2`). Benchmark only, never the app:
+        // it links a closed static library (PhononTDT.xcframework).
+        .package(url: "https://github.com/fermionresearch/phonon-coreml.git", exact: "1.1.2"),
     ],
     targets: [
         .executableTarget(
@@ -26,6 +29,7 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "HexCore", package: "HexCore"),
+                .product(name: "PhononCoreML", package: "phonon-coreml"),
             ],
             path: "Sources/lsbench"
         ),

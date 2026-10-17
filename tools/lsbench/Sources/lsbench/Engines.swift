@@ -65,7 +65,7 @@ final class ParakeetEngine: BenchEngine {
     let name: String
     private let version: AsrModelVersion
     private let modelsRoot: URL
-    private var manager: AsrManager?
+    fileprivate var manager: AsrManager?
 
     init(version: AsrModelVersion, label: String, modelsRoot: URL) {
         self.version = version
@@ -85,6 +85,16 @@ final class ParakeetEngine: BenchEngine {
         guard let manager else { throw BenchError.notLoaded }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         return try await manager.transcribe(samples, decoderState: &state).text
+    }
+}
+
+extension ParakeetEngine: TimedBenchEngine {
+    func transcribeTimed(_ samples: [Float]) async throws -> (text: String, words: [SpokenWord]) {
+        guard let manager else { throw BenchError.notLoaded }
+        var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        let result = try await manager.transcribe(samples, decoderState: &state)
+        let words = WordMatcher.words(fromPieces: (result.tokenTimings ?? []).map { ($0.token, $0.startTime, $0.endTime) })
+        return (result.text, words)
     }
 }
 

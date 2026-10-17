@@ -12,96 +12,82 @@ struct PermissionsSectionView: View {
 
 	var body: some View {
 		Section {
-			HStack(spacing: 12) {
-				// Microphone
-				permissionCard(
-					title: "Microphone",
-					icon: "mic.fill",
-					status: microphonePermission,
-					action: { store.send(.requestMicrophone) }
-				)
-				
+			// Microphone
+			permissionRow(
+				title: "Microphone",
+				icon: "mic.fill",
+				color: .red,
+				status: microphonePermission,
+				action: { store.send(.requestMicrophone) }
+			)
+
 			// Accessibility + Keyboard
-			permissionCard(
+			permissionRow(
 				title: "Accessibility",
 				icon: "accessibility",
+				color: .blue,
 				status: combinedAccessibilityStatus,
 				action: {
 					store.send(.requestAccessibility)
 					store.send(.requestInputMonitoring)
 				}
 			)
-		}
 
-		if store.hotkeyPermissionState.inputMonitoring != .granted {
-			VStack(alignment: .leading, spacing: 6) {
+			if store.hotkeyPermissionState.inputMonitoring != .granted {
 				Label {
-					Text("Input Monitoring is required so Hex can listen for your hotkey.")
-						.font(.callout)
-						.foregroundStyle(.primary)
+					HStack {
+						Text("Input Monitoring is required so Hex can listen for your hotkey.")
+							.font(.callout)
+							.foregroundStyle(.primary)
+						Spacer(minLength: 12)
+						Button {
+							store.send(.requestInputMonitoring)
+						} label: {
+							Text("Open Input Monitoring Settings")
+						}
+						.buttonStyle(.borderedProminent)
+						.controlSize(.small)
+					}
 				} icon: {
 					Image(systemName: "exclamationmark.triangle.fill")
-						.foregroundStyle(.yellow)
 				}
-
-				Button {
-					store.send(.requestInputMonitoring)
-				} label: {
-					Text("Open Input Monitoring Settings")
-				}
-				.buttonStyle(.borderedProminent)
-				.controlSize(.small)
+				.labelStyle(.tile(.yellow))
 			}
-			.padding(12)
-			.background(Color(nsColor: .controlBackgroundColor))
-			.clipShape(RoundedRectangle(cornerRadius: 10))
-		}
-
 		} header: {
 			Text("Permissions")
 		}
 		.enableInjection()
 	}
-	
+
 	@ViewBuilder
-	private func permissionCard(
+	private func permissionRow(
 		title: String,
 		icon: String,
+		color: Color,
 		status: PermissionStatus,
 		action: @escaping () -> Void
 	) -> some View {
-		HStack(spacing: 8) {
-			Image(systemName: icon)
-				.font(.body)
-				.foregroundStyle(.secondary)
-				.frame(width: 16)
-			
-			Text(title)
-				.font(.body.weight(.medium))
-				.lineLimit(1)
-				.truncationMode(.tail)
-				.layoutPriority(1)
-			
-			Spacer()
-			
-			switch status {
-			case .granted:
-				Image(systemName: "checkmark.circle.fill")
-					.foregroundStyle(.green)
-					.font(.body)
-			case .denied, .notDetermined:
-				Button("Grant") {
-					action()
+		Label {
+			HStack {
+				Text(title)
+				Spacer()
+				switch status {
+				case .granted:
+					Image(systemName: "checkmark.circle.fill")
+						.foregroundStyle(.green)
+						.font(.body)
+				case .denied, .notDetermined:
+					Button("Grant") {
+						action()
+					}
+					.buttonStyle(.bordered)
+					.controlSize(.small)
 				}
-				.buttonStyle(.bordered)
-				.controlSize(.small)
 			}
+		} icon: {
+			Image(systemName: icon)
 		}
-		.padding(.horizontal, 12)
-		.padding(.vertical, 8)
-		.frame(maxWidth: .infinity)
-		.background(Color(nsColor: .controlBackgroundColor))
-		.clipShape(RoundedRectangle(cornerRadius: 8))
+		.labelStyle(.tile(color))
 	}
 
 	private var combinedAccessibilityStatus: PermissionStatus {

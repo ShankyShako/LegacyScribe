@@ -15,28 +15,30 @@ struct SoundSectionView: View {
 
 		return Section {
 			Label {
-				Toggle(
-					"Sound Effects",
-					isOn: Binding(
-						get: { store.hexSettings.soundEffectsEnabled },
-						set: { store.send(.setSoundEffectsEnabled($0)) }
+				HStack(spacing: 10) {
+					Text("Sound effects")
+					Spacer(minLength: 12)
+					Slider(value: sliderBinding, in: 0...1) {
+						Text("Volume")
+					}
+					.labelsHidden()
+					.frame(width: 110)
+					.disabled(!store.hexSettings.soundEffectsEnabled)
+					.help("Volume \(formattedVolume(for: store.hexSettings.soundEffectsVolume))")
+					.accessibilityValue(formattedVolume(for: store.hexSettings.soundEffectsVolume))
+					Toggle(
+						"Sound effects",
+						isOn: Binding(
+							get: { store.hexSettings.soundEffectsEnabled },
+							set: { store.send(.setSoundEffectsEnabled($0)) }
+						)
 					)
-				)
+					.labelsHidden()
+				}
 			} icon: {
 				Image(systemName: "speaker.wave.2.fill")
 			}
-
-			VStack(alignment: .leading, spacing: 8) {
-				HStack {
-					Text("Volume")
-					Spacer()
-					Text(formattedVolume(for: store.hexSettings.soundEffectsVolume))
-						.foregroundStyle(.secondary)
-						.monospacedDigit()
-				}
-				Slider(value: sliderBinding, in: 0...1)
-					.disabled(!store.hexSettings.soundEffectsEnabled)
-			}
+			.labelStyle(.tile(.pink))
 		} header: {
 			Text("Sound")
 		}

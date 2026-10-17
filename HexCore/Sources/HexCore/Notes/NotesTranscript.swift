@@ -34,12 +34,14 @@ public struct NotesTranscriptParagraph: Equatable, Sendable {
 /// for a chunk that failed twice (its audio is kept in `failed/`). A chunk split by speaker also has
 /// `"turns": [{"speaker": 1, "text": "…"}, …]`; its `text` is still the plain chunk text (the turns joined),
 /// so everything that reads `text`, and an older app, works unchanged. A line without `turns` is one
-/// unlabelled chunk.
+/// unlabelled chunk. `seconds` is the chunk's length, stored when the chunk is committed (absent in
+/// transcripts recorded before trimming); the Trim timeline places sentences with it.
 public struct NotesTranscriptLine: Codable, Equatable, Sendable {
 	public var chunk: Int
 	public var text: String?
 	public var gap: Bool?
 	public var turns: [NotesTranscriptTurn]?
+	public var seconds: Double?
 
 	public init(chunk: Int, text: String) {
 		self.chunk = chunk
@@ -183,14 +185,21 @@ public struct NotesTranscript: Equatable, Sendable {
 		}
 		var speakers: [String: Int] = [:]
 		for speaker in registry?.speakers ?? [] where speakers[registry!.label(speaker.id)] == nil {
-			speakers[registry!.label(speaker.id)] = speaker.id
+			speakers[registry!.label(speaker.id)] = registry!.resolved(speaker.id)
 		}
+		// A paragraph keeps the length of the chunk whose number it takes (extra paragraphs have none).
+		let lengths = Dictionary(lines.compactMap { line in line.seconds.map { (line.chunk, $0) } }, uniquingKeysWith: { first, _ in first })
 		return NotesTranscript(lines: zip(numbers, paragraphs).map { chunk, paragraph in
-			if paragraph == Self.gapMarker { return .gap(chunk: chunk) }
-			if let (speaker, rest) = Self.speakerAndText(paragraph, speakers: speakers) {
-				return NotesTranscriptLine(chunk: chunk, turns: [NotesTranscriptTurn(speaker: speaker, text: rest)])
+			var line: NotesTranscriptLine
+			if paragraph == Self.gapMarker {
+				line = .gap(chunk: chunk)
+			} else if let (speaker, rest) = Self.speakerAndText(paragraph, speakers: speakers) {
+				line = NotesTranscriptLine(chunk: chunk, turns: [NotesTranscriptTurn(speaker: speaker, text: rest)])
+			} else {
+				line = NotesTranscriptLine(chunk: chunk, text: paragraph)
 			}
-			return NotesTranscriptLine(chunk: chunk, text: paragraph)
+			line.seconds = lengths[chunk]
+			return line
 		})
 	}
 

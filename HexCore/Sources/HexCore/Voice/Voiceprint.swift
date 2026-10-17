@@ -2,8 +2,8 @@ import Foundation
 
 /// A stored voice: the mean WeSpeaker v2 embedding of a speaker's recordings. The user's own (`userID`) is
 /// enrolled from History on request, seeds every notes session's `SpeakerRegistry` as "You", and is deleted
-/// only when the user asks (not by deleting coach data). Named voiceprints of other people can be added later
-/// without a format change.
+/// only when the user asks (not by deleting coach data). Other people's voiceprints carry a name and come from
+/// naming a speaker in a notes transcript (`SpeakerNaming`); they seed later sessions the same way.
 public struct Voiceprint: Codable, Equatable, Sendable {
 	public var id: String
 	public var name: String?
@@ -68,6 +68,19 @@ public struct Voiceprint: Codable, Equatable, Sendable {
 		let norm = vector.reduce(0) { $0 + $1 * $1 }.squareRoot()
 		guard norm > 1e-9 else { return vector }
 		return vector.map { $0 / norm }
+	}
+
+	/// This voiceprint with `other` averaged in: the centroids weighted by their speech seconds (equally when
+	/// either has none), counts and seconds summed. Keeps this one's ID, name and enrolment date;
+	/// `selfScoreMedian` becomes the mean cosine of the two against the result.
+	public func merged(with other: Voiceprint) -> Voiceprint {
+		let weights = sourceSeconds > 0 && other.sourceSeconds > 0 ? [sourceSeconds, other.sourceSeconds] : [1, 1]
+		var result = self
+		result.embedding = Self.normalizedMean([embedding, other.embedding], weights: weights)
+		result.sourceCount = sourceCount + other.sourceCount
+		result.sourceSeconds = sourceSeconds + other.sourceSeconds
+		result.selfScoreMedian = (Self.cosine(embedding, result.embedding) + Self.cosine(other.embedding, result.embedding)) / 2
+		return result
 	}
 
 	/// The L2-normalized mean of the given embeddings (empty for none).

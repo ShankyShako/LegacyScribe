@@ -121,8 +121,16 @@ private func percentile(_ values: [Double], _ p: Double) -> Double {
 /// start and end are exact. Isolated words lack coarticulation, which makes boundaries harder to find, not
 /// easier; it is still synthetic speech, so real voices will do somewhat worse.
 func runSyntheticAlignBench(_ arguments: [String]) async throws {
+    var arguments = arguments
+    // `--engine <spec>` times the words with that engine's own word timings (parakeet:v3|phonon2, fermion:phonon2),
+    // moved onto the line's words like the app does, with and without the +80 ms start shift.
+    var engineSpec: String?
+    if let i = arguments.firstIndex(of: "--engine"), i + 1 < arguments.count {
+        engineSpec = arguments[i + 1]
+        arguments.removeSubrange(i ... (i + 1))
+    }
     guard let path = arguments.first else {
-        print("usage: lsbench align --tts <practice_lines.json> [count]")
+        print("usage: lsbench align --tts [--engine <spec>] <practice_lines.json> [count]")
         return
     }
     struct Lines: Decodable { struct Line: Decodable { var text: String }; var lines: [Line] }
@@ -144,7 +152,17 @@ func runSyntheticAlignBench(_ arguments: [String]) async throws {
     // The app's method by default: Parakeet TDT v2's token timings moved onto the words (`WordMatcher`).
     // LSBENCH_CTC=110m or 0.6b times them with the CTC aligner instead.
     var tdt: AsrManager?
-    if ProcessInfo.processInfo.environment["LSBENCH_CTC"] == nil {
+    var timedEngine: (any TimedBenchEngine)?
+    var shiftedStartErrors: [Double] = []
+    var shiftedEndErrors: [Double] = []
+    if let engineSpec {
+        let engine = try makeEngine(engineSpec, cohereChunkSeconds: nil)
+        guard let timed = engine as? any TimedBenchEngine else { throw BenchError.usage("\(engineSpec) has no word timings") }
+        // Faint noise: an all-zero warm-up makes some Core ML models throw a zero-shape error.
+        var noise = SplitMix(seed: 7)
+        try await engine.load(warmup: (0 ..< 48_000).map { _ in Float(noise.unit() - 0.5) * 0.02 })
+        timedEngine = timed
+    } else if ProcessInfo.processInfo.environment["LSBENCH_CTC"] == nil {
         let tdtDirectory = modelsRoot.appendingPathComponent(AsrModels.defaultCacheDirectory(for: .v2).lastPathComponent)
         tdt = AsrManager(config: .default, models: try await AsrModels.downloadAndLoad(to: tdtDirectory, version: .v2))
     }
@@ -164,6 +182,16 @@ func runSyntheticAlignBench(_ arguments: [String]) async throws {
             samples += clip
             truth.append(SpokenWord(word: word, start: start, end: Double(samples.count) / 16_000))
             samples += [Float](repeating: 0, count: Int(16_000 * (0.03 + 0.22 * generator.unit())))
+        }
+        if let timedEngine {
+            let heard = try await timedEngine.transcribeTimed(samples).words
+            let raw = WordMatcher.transfer(heard, onto: words, startShift: 0)
+            let shifted = WordMatcher.transfer(heard, onto: words, startShift: WordMatcher.tdtStartShift)
+            startErrors += zip(raw, truth).map { $0.start - $1.start }
+            endErrors += zip(raw, truth).map { $0.end - $1.end }
+            shiftedStartErrors += zip(shifted, truth).map { $0.start - $1.start }
+            shiftedEndErrors += zip(shifted, truth).map { $0.end - $1.end }
+            continue
         }
         if let tdt {
             var state = TdtDecoderState.make(decoderLayers: await tdt.decoderLayerCount)
@@ -205,6 +233,11 @@ func runSyntheticAlignBench(_ arguments: [String]) async throws {
         let within = Double(absolute.filter { $0 <= 0.08 }.count) / Double(max(absolute.count, 1))
         return String(format: "median %.0f ms off (signed %+.0f), p90 %.0f ms, %.0f%% within 80 ms",
                       percentile(absolute, 0.5) * 1000, percentile(signed, 0.5) * 1000, percentile(absolute, 0.9) * 1000, within * 100)
+    }
+    if timedEngine != nil {
+        print(String(format: "%@: %d words. Start: %@. End: %@.", engineSpec ?? "", startErrors.count, summary(startErrors), summary(endErrors)))
+        print(String(format: "%@ with starts +80 ms: Start: %@. End: %@.", engineSpec ?? "", summary(shiftedStartErrors), summary(shiftedEndErrors)))
+        return
     }
     print(String(format: "%d words, lead %.0f ms. Start: %@. End: %@.", startErrors.count, lead * 1000, summary(startErrors), summary(endErrors)))
 }

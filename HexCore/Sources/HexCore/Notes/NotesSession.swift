@@ -22,6 +22,13 @@ public struct NotesSession: Codable, Equatable, Sendable, Identifiable {
 	public var notesError: String?
 	/// Model that wrote `notes.md`.
 	public var notesModel: String?
+	/// The `NotesTrims.version` `notes.md` was written from; nil (written before trimming) reads as 0.
+	public var notesTrimsVersion: Int?
+
+	/// The notes are written and the trims have changed since: "Write notes again" is offered.
+	public func notesStale(trimsVersion: Int) -> Bool {
+		stage == .done && trimsVersion != (notesTrimsVersion ?? 0)
+	}
 
 	public init(id: String, startedAt: Date, stage: Stage = .recording) {
 		self.id = id
@@ -111,6 +118,21 @@ public struct NotesSessionFolder: Sendable {
 	public func loadSpeakers() -> SpeakerRegistry? {
 		guard let data = try? Data(contentsOf: speakersURL) else { return nil }
 		return try? JSONDecoder().decode(SpeakerRegistry.self, from: data)
+	}
+
+	public var trimsURL: URL { url.appending(component: "trims.json") }
+
+	/// The stretches left out of the notes; none when the file is missing or doesn't parse.
+	public func loadTrims() -> NotesTrims {
+		guard let data = try? Data(contentsOf: trimsURL) else { return NotesTrims() }
+		return (try? JSONDecoder().decode(NotesTrims.self, from: data)) ?? NotesTrims()
+	}
+
+	/// Atomic, in its own file: a trim never touches `transcript.jsonl`.
+	public func saveTrims(_ trims: NotesTrims) throws {
+		let encoder = JSONEncoder()
+		encoder.outputFormatting = [.sortedKeys]
+		try encoder.encode(trims).write(to: trimsURL, options: .atomic)
 	}
 
 	/// Atomic. A registry ahead of the transcript is harmless; one behind it would renumber speakers.

@@ -44,8 +44,12 @@ struct SettingsFeature {
     @Shared(.isSettingPasteLastTranscriptHotkey) var isSettingPasteLastTranscriptHotkey: Bool = false
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
+    /// The sample caption is up for dragging (shared with the indicator window).
+    @Shared(.isPlacingCaption) var isPlacingCaption: Bool = false
     @Shared(.hotkeyPermissionState) var hotkeyPermissionState: HotkeyPermissionState
 
+    /// Apple's English speech model is installed, so the live caption can run. The section is hidden otherwise.
+    var liveCaptionAvailable = false
     var languages: IdentifiedArrayOf<Language> = []
     var currentModifiers: Modifiers = .init(modifiers: [])
     var currentPasteLastModifiers: Modifiers = .init(modifiers: [])
@@ -111,12 +115,22 @@ struct SettingsFeature {
     case setSoundEffectsEnabled(Bool)
     case setSoundEffectsVolume(Double)
 
+    // Live caption
+    case liveCaptionAvailabilityChecked(Bool)
+    case setLiveCaptionEnabled(Bool)
+    case setLiveCaptionPlacement(CaptionPlacement)
+    case setPlacingCaption(Bool)
+
     // Speech Coach
     case setSpeechCoachEnabled(Bool)
     case setCoachStutterFriendly(Bool)
     /// Forwarded to AppFeature, which switches tabs.
     case openSpeechCoach
     case deleteCoachData
+
+    // Notes
+    /// Forwarded to AppFeature, which opens the Notes tab on its settings page.
+    case openNotesSettings
 
     // Permission delegation (forwarded to AppFeature)
     case requestMicrophone
@@ -343,6 +357,13 @@ struct SettingsFeature {
 
           await send(.modelDownload(.fetchModels))
           await send(.loadAvailableInputDevices)
+          // The live caption needs Apple's English model; the Live caption section is absent without it.
+          var captionAvailable = await AppleSpeech.isInstalled()
+          #if DEBUG
+          // Debug runs can hide the section to see a Mac without the model: LEGACYSCRIBE_CAPTION_UNAVAILABLE=1.
+          if ProcessInfo.processInfo.environment["LEGACYSCRIBE_CAPTION_UNAVAILABLE"] == "1" { captionAvailable = false }
+          #endif
+          await send(.liveCaptionAvailabilityChecked(captionAvailable))
 
           // Listen for device connection/disconnection notifications
           // Using a simpler debounced approach with a single task
@@ -889,6 +910,25 @@ struct SettingsFeature {
         state.$hexSettings.withLock { $0.maxHistoryEntries = maxHistoryEntries }
         return .none
 
+      case let .liveCaptionAvailabilityChecked(available):
+        state.liveCaptionAvailable = available
+        return .none
+
+      case let .setLiveCaptionEnabled(isOn):
+        state.$hexSettings.withLock { $0.liveCaptionEnabled = isOn }
+        if !isOn { state.$isPlacingCaption.withLock { $0 = false } }
+        return .none
+
+      case let .setLiveCaptionPlacement(placement):
+        state.$hexSettings.withLock { $0.liveCaptionPlacement = placement }
+        // Only "where I put it" has a spot to place.
+        if placement != .custom { state.$isPlacingCaption.withLock { $0 = false } }
+        return .none
+
+      case let .setPlacingCaption(isPlacing):
+        state.$isPlacingCaption.withLock { $0 = isPlacing }
+        return .none
+
       case let .setSpeechCoachEnabled(isOn):
         state.$hexSettings.withLock { $0.speechCoachEnabled = isOn }
         return .none
@@ -897,7 +937,7 @@ struct SettingsFeature {
         state.$hexSettings.withLock { $0.coachStutterFriendly = isOn }
         return .none
 
-      case .openSpeechCoach:
+      case .openSpeechCoach, .openNotesSettings:
         return .none
 
       case .deleteCoachData:

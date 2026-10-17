@@ -12,6 +12,7 @@ import MLX
 // Engines:
 //   cohere:<model-dir>            Cohere Transcribe via mlx-audio-swift, loaded from a local MLX checkpoint
 //   parakeet:v2|v3|ultra|phonon2  Parakeet TDT via FluidAudio (downloads on first use)
+//   fermion:phonon2               Phonon-2 through Fermion's own phonon-coreml runtime (Models/fermion/Phonon-2-CoreML)
 //
 // Fixtures: <name>.{wav,m4a,flac,caf} with an optional <name>.txt reference transcript.
 
@@ -76,6 +77,8 @@ func makeEngine(_ spec: String, cohereChunkSeconds: Float?) throws -> BenchEngin
         if let cohereChunkSeconds { return CohereMLXEngine(modelDir: modelDir, chunkSeconds: cohereChunkSeconds) }
         return CohereMLXEngine(modelDir: modelDir)
     case ("apple", _): return AppleSpeechBenchEngine()
+    case ("fermion", "phonon2"):
+        return FermionEngine(bundle: modelsRoot.deletingLastPathComponent().appendingPathComponent("fermion/Phonon-2-CoreML"))
     case ("parakeet", "v2"): return ParakeetEngine(version: .v2, label: "v2", modelsRoot: modelsRoot)
     case ("parakeet", "v3"): return ParakeetEngine(version: .v3, label: "v3", modelsRoot: modelsRoot)
     case ("parakeet", "ultra"): return ParakeetEngine(version: .ultra, label: "ultra", modelsRoot: modelsRoot)
@@ -97,7 +100,7 @@ func run() async throws {
         return args[i + 1]
     }
     guard let engineSpec = option("--engine"), let fixturesPath = option("--fixtures") else {
-        throw BenchError.usage("usage: lsbench --engine <cohere:DIR|parakeet:v2|v3|ultra|phonon2|apple> --fixtures DIR [--runs N] [--json FILE]")
+        throw BenchError.usage("usage: lsbench --engine <cohere:DIR|parakeet:v2|v3|ultra|phonon2|fermion:phonon2|apple> --fixtures DIR [--runs N] [--json FILE]")
     }
     let runs = option("--runs").flatMap(Int.init) ?? 3
     let jsonPath = option("--json")
@@ -197,6 +200,10 @@ do {
         try await runCoachBench(Array(CommandLine.arguments.dropFirst(2)))
     } else if CommandLine.arguments.dropFirst().first == "voice" {
         try await runVoiceBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "live" {
+        try await runLiveBench(Array(CommandLine.arguments.dropFirst(2)))
+    } else if CommandLine.arguments.dropFirst().first == "fillers" {
+        try await runFillerBench(Array(CommandLine.arguments.dropFirst(2)))
     } else if CommandLine.arguments.dropFirst().first == "words" {
         try await runWordsBench(Array(CommandLine.arguments.dropFirst(2)))
     } else {

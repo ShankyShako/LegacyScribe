@@ -14,6 +14,7 @@ at the kill (transcribed or pending), once each, with the reference text, nothin
 notes.md exists. Audio still in memory at the kill (under 30 s) is lost by design.
 
 Usage: tools/notes-crashtest.py FEED_10MIN.wav [--long FEED_2H.wav] [--app PATH] [--only CASE,...]
+                                [--voiceprints DIR]  (a Voiceprints folder to copy into each root, so "You" is labelled)
 Build first: xcodebuild -scheme Hex -configuration Debug ... build
 """
 
@@ -29,6 +30,7 @@ import tempfile
 import time
 
 DATA = os.path.expanduser("~/Library/Application Support/LegacyScribe")
+VOICEPRINTS = None
 DEFAULT_APP = glob.glob(os.path.expanduser(
     "~/Library/Developer/Xcode/DerivedData/Hex-*/Build/Products/Debug/LegacyScribe Debug.app/Contents/MacOS/LegacyScribe Debug"))
 
@@ -80,6 +82,8 @@ class Run:
 def scratch_root(name):
     root = tempfile.mkdtemp(prefix="lsnotes-%s-" % name)
     os.symlink(os.path.join(DATA, "Models"), os.path.join(root, "Models"))
+    if VOICEPRINTS:
+        shutil.copytree(VOICEPRINTS, os.path.join(root, "Voiceprints"))
     return root
 
 
@@ -223,7 +227,10 @@ def main():
     parser.add_argument("--long-notes-feed", help="a feed long enough for 2+ note parts (kill-noting-parts; ~3,500 words)")
     parser.add_argument("--app", default=DEFAULT_APP[0] if DEFAULT_APP else None)
     parser.add_argument("--only", default="")
+    parser.add_argument("--voiceprints", help="a Voiceprints folder (from `--notes-harness enrol`) copied into each scratch root")
     args = parser.parse_args()
+    global VOICEPRINTS
+    VOICEPRINTS = args.voiceprints
     only = set(filter(None, args.only.split(",")))
     want = lambda name: not only or name in only
     if not args.app or not os.path.exists(args.app):

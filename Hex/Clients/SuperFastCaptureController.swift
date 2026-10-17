@@ -105,6 +105,10 @@ final class SuperFastCaptureController {
     var didLogFirstBuffer: Bool
     /// The first `headDuration` of samples, pre-roll included.
     var head: [Float] = []
+    /// Feeds the live caption (`recordingSamples()`): pre-roll first, then every converted buffer.
+    var samples: AsyncStream<[Float]>.Continuation?
+    /// Samples yielded to `samples`, logged at finish.
+    var yieldedSamples = 0
   }
 
   private let logger = HexLog.recording
@@ -124,6 +128,8 @@ final class SuperFastCaptureController {
   private var converter: AVAudioConverter?
   private var configurationChangeObserver: NSObjectProtocol?
   private var activeRecording: ActiveRecording?
+  /// The stream behind `ActiveRecording.samples`, handed out once per dictation by `recordingSamples()`.
+  private var liveSamples: AsyncStream<[Float]>?
   private var captureGeneration = 0
   private var recordingFailure: RecordingFailure?
   private var keepWarmBuffer = false
@@ -287,6 +293,7 @@ final class SuperFastCaptureController {
       captureGeneration += 1
       converter = nil
       if clearingRecordingState {
+        endLiveSamples()
         activeRecording = nil
         recordingFailure = nil
         ringBuffer.clear()
@@ -352,13 +359,19 @@ final class SuperFastCaptureController {
         logger.notice(
           "Capture engine recording file opened prepended=\(String(format: "%.3f", prependedDuration))s requestedPreRoll=\(String(format: "%.3f", preRollDuration))s"
         )
+        let (liveStream, liveContinuation) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
+        if !preRollSamples.isEmpty { liveContinuation.yield(preRollSamples) }
+        endLiveSamples()
+        liveSamples = liveStream
         activeRecording = ActiveRecording(
           url: url,
           file: file,
           requestedAt: requestedAt,
           prependedDuration: prependedDuration,
           didLogFirstBuffer: false,
-          head: preRollSamples
+          head: preRollSamples,
+          samples: liveContinuation,
+          yieldedSamples: preRollSamples.count
         )
       } catch {
         startError = error
@@ -375,8 +388,25 @@ final class SuperFastCaptureController {
     processingQueue.sync { activeRecording?.head ?? [] }
   }
 
+  /// The recording in progress as 16 kHz mono Float32 chunks, pre-roll first, for the live caption; nil when not
+  /// recording or on a backend without one. One consumer per dictation: a second call returns the same stream.
+  /// The stream ends when the recording does.
+  func recordingSamples() -> AsyncStream<[Float]>? {
+    processingQueue.sync { activeRecording == nil ? nil : liveSamples }
+  }
+
+  /// Finishes the live stream and drops it. Call on `processingQueue`.
+  private func endLiveSamples() {
+    if let recording = activeRecording, let continuation = recording.samples {
+      logger.debug("Live caption samples yielded=\(recording.yieldedSamples) wavFrames=\(recording.file.length) at finish")
+      continuation.finish()
+    }
+    liveSamples = nil
+  }
+
   func finishRecording(clearBuffer: Bool = true) -> FinishRecordingResult {
     processingQueue.sync {
+      endLiveSamples()
       let result: FinishRecordingResult
       if let recordingFailure {
         result = .failed(recordingFailure)
@@ -444,10 +474,17 @@ final class SuperFastCaptureController {
       activeRecording = recording
     }
 
+    if let continuation = recording.samples {
+      continuation.yield(Array(UnsafeBufferPointer(start: samples, count: sampleCount)))
+      recording.yieldedSamples += sampleCount
+      activeRecording = recording
+    }
+
     do {
       try recording.file.write(from: converted)
     } catch {
       logger.error("Failed to write capture engine audio: \(error.localizedDescription)")
+      endLiveSamples()
       activeRecording = nil
       recordingFailure = .captureWriteFailed(error.localizedDescription)
       FileManager.default.removeItemIfExists(at: recording.url)

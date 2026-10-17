@@ -21,6 +21,9 @@ struct TranscriptionFeature {
   @ObservableState
   struct State: Equatable {
     var isRecording: Bool = false
+    /// What the live caption shows while recording (Apple's streaming recognizer on the dictation's own audio);
+    /// nil outside a dictation. Never pasted or stored.
+    var caption: CaptionText?
     var isTranscribing: Bool = false
     var isPrewarming: Bool = false
     /// The last dictation hasn't been pasted yet; the talk key is ignored until it is.
@@ -62,6 +65,8 @@ struct TranscriptionFeature {
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.isNotesRecording) var isNotesRecording: Bool = false
+    /// Settings has the sample caption up for the user to drag; a talk-key press ends it.
+    @Shared(.isPlacingCaption) var isPlacingCaption: Bool = false
     @Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
   }
@@ -79,6 +84,7 @@ struct TranscriptionFeature {
     /// The capture engine is running; the speech and rewrite models start loading only now.
     case microphoneReady
     case stopRecording
+    case captionUpdated(CaptionText)
 
     // Cancel/discard flow
     case cancel   // Explicit cancellation with sound
@@ -138,6 +144,7 @@ struct TranscriptionFeature {
     case superPeek
     case cancelUndo
     case notesHold
+    case liveCaption
   }
 
   @Dependency(\.transcription) var transcription
@@ -155,6 +162,7 @@ struct TranscriptionFeature {
   @Dependency(\.codeTalk) var codeTalk
   @Dependency(\.focusedText) var focusedText
   @Dependency(\.speechPeek) var speechPeek
+  @Dependency(\.liveCaption) var liveCaption
   @Dependency(\.notes) var notes
 
   var body: some ReducerOf<Self> {
@@ -208,6 +216,11 @@ struct TranscriptionFeature {
 
       case .stopRecording:
         return handleStopRecording(&state)
+
+      case let .captionUpdated(text):
+        // A late update after key-up (the stream is cancelled, but one may be in flight) shows nothing.
+        if state.isRecording { state.caption = text }
+        return .none
 
       // MARK: - Transcription Results
 
@@ -697,8 +710,10 @@ private extension TranscriptionFeature {
   func handleNotesStart(_ state: inout State) -> Effect<Action> {
     state.notesRecording = NotesRecording(startedAt: now)
     state.$isNotesRecording.withLock { $0 = true }
+    state.caption = nil
     transcriptionFeatureLogger.notice("Notes session requested")
     return .merge(
+      .cancel(id: CancelID.liveCaption),
       .run { [notes, sleepManagement] send in
         soundEffect.play(.startRecording)
         // Hands-free for up to 2 h: idle sleep would end it.
@@ -848,6 +863,7 @@ private extension TranscriptionFeature {
       )
     }
     state.isRecording = true
+    state.$isPlacingCaption.withLock { $0 = false }
     state.notesHold = false
     let startTime = now
     state.recordingStartTime = startTime
@@ -917,6 +933,14 @@ private extension TranscriptionFeature {
   func handleMicrophoneReady(_ state: State) -> Effect<Action> {
     guard state.isRecording else { return .none }
     return .merge(
+      // The caption starts only now, so it can't slow down arming the microphone.
+      .run { [liveCaption, recording, enabled = state.hexSettings.liveCaptionEnabled] send in
+        guard enabled, await liveCaption.isAvailable(), let samples = await recording.recordingSamples() else { return }
+        for await text in liveCaption.captions(samples) {
+          await send(.captionUpdated(text))
+        }
+      }
+      .cancellable(id: CancelID.liveCaption, cancelInFlight: true),
       .run { [transcription, model = state.hexSettings.selectedModel] _ in
         await transcription.prewarm(model)
       },
@@ -929,6 +953,8 @@ private extension TranscriptionFeature {
 
   func handleStopRecording(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
+    // Key-up: the caption goes with the recording; the real engine's text is what gets pasted and kept.
+    state.caption = nil
     let keyUp = stampLatency("keyUp")
 
     let stopTime = now
@@ -988,6 +1014,7 @@ private extension TranscriptionFeature {
     state.isPrewarming = true
 
     return .merge(
+      .cancel(id: CancelID.liveCaption),
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
       .cancel(id: CancelID.notesHold),
@@ -1708,8 +1735,10 @@ private extension TranscriptionFeature {
     state.isRewriting = false
     state.superActive = false
     state.superField = nil
+    state.caption = nil
 
     return .merge(
+      .cancel(id: CancelID.liveCaption),
       .cancel(id: CancelID.transcription),
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
@@ -1745,9 +1774,11 @@ private extension TranscriptionFeature {
     state.isRecording = false
     state.isPrewarming = false
     state.superActive = false
+    state.caption = nil
 
     // Silently discard - no sound effect
     return .merge(
+      .cancel(id: CancelID.liveCaption),
       .cancel(id: CancelID.recordingStart),
       .cancel(id: CancelID.superPeek),
       .cancel(id: CancelID.notesHold),
@@ -1775,6 +1806,14 @@ struct TranscriptionView: View {
   /// A one-off notice (mode change, rewrite fallback) and the id of its hide timer.
   @State private var notice: DictationNotice?
   @State private var noticeID = 0
+  /// The live caption's measured size, for placing it by its centre.
+  @State private var captionSize = CGSize(width: 364, height: 44)
+  /// While the sample caption is dragged: where it started, and the spot it has reached.
+  @State private var dragStart: CGPoint?
+  @State private var dragSpot: CaptionSpot?
+  @Shared(.hexSettings) private var hexSettings: HexSettings
+  @Shared(.isPlacingCaption) private var isPlacingCaption: Bool
+  private let screen = VisibleScreen.shared
 
   var status: TranscriptionIndicatorView.Status {
     if store.notesRecording != nil {
@@ -1814,7 +1853,8 @@ struct TranscriptionView: View {
     return mode != .clean ? .recordingIn(mode) : nil
   }
 
-  var body: some View {
+  /// The indicator, its notice and (placement "under the indicator") the caption, stacked from the top.
+  private var indicatorColumn: some View {
     VStack(spacing: 8) {
       TranscriptionIndicatorView(
         status: status,
@@ -1849,6 +1889,111 @@ struct TranscriptionView: View {
         visibleNotice == nil ? DictationNoticeView.exit : DictationNoticeView.entrance,
         value: visibleNotice == nil
       )
+      if captionPlacement == .underIndicator {
+        ZStack {
+          if let caption = store.caption, !caption.isEmpty {
+            LiveCaptionView(caption: caption)
+              .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
+          }
+        }
+        .animation(store.caption?.isEmpty ?? true ? DictationNoticeView.exit : DictationNoticeView.entrance, value: store.caption?.isEmpty ?? true)
+      }
+    }
+  }
+
+  /// Bottom of the screen and "where I put it": the caption is placed in the window by `CaptionLayout`, off the
+  /// indicator column. In placing mode a draggable sample takes its place.
+  private var floatingCaptionLayer: some View {
+    GeometryReader { proxy in
+      let origin = proxy.frame(in: .global).origin
+      let visible = screen.visibleRect
+      if showsPlacingSample {
+        placingSample(visible: visible, origin: origin)
+          .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
+      } else {
+        let center = CaptionLayout.center(
+          placement: captionPlacement,
+          spot: store.hexSettings.liveCaptionSpot,
+          visible: visible,
+          caption: captionSize
+        ) ?? CGPoint(x: visible.midX, y: visible.maxY - 24 - captionSize.height / 2)
+        ZStack {
+          if let caption = store.caption, !caption.isEmpty {
+            LiveCaptionView(caption: caption)
+              .onGeometryChange(for: CGSize.self, of: \.size) { captionSize = $0 }
+              .transition(DictationNoticeView.transition(reduceMotion: reduceMotion))
+          }
+        }
+        .animation(store.caption?.isEmpty ?? true ? DictationNoticeView.exit : DictationNoticeView.entrance, value: store.caption?.isEmpty ?? true)
+        .position(x: center.x - origin.x, y: center.y - origin.y)
+      }
+    }
+    .animation(showsPlacingSample ? DictationNoticeView.entrance : DictationNoticeView.exit, value: showsPlacingSample)
+  }
+
+  /// A live caption at its biggest (two full lines), the size placing mode clamps with, so a spot dragged to an
+  /// edge keeps every later caption inside the screen.
+  private static let placingCaptionSize = CGSize(width: 364, height: 44)
+
+  private func placingSample(visible: CGRect, origin: CGPoint) -> some View {
+    let spot = dragSpot ?? store.hexSettings.liveCaptionSpot ?? CaptionLayout.defaultSpot
+    let center = CaptionLayout.center(
+      placement: .custom,
+      spot: spot,
+      visible: visible,
+      caption: Self.placingCaptionSize
+    ) ?? .zero
+    let barAbove = spot.y > 0.75
+    let shift = (CaptionPlacingView.barHeight + CaptionPlacingView.barGap) / 2 * (barAbove ? -1 : 1)
+    return CaptionPlacingView(
+      barAbove: barAbove,
+      onReset: { $hexSettings.withLock { $0.liveCaptionSpot = CaptionLayout.defaultSpot } },
+      onDone: { $isPlacingCaption.withLock { $0 = false } }
+    )
+    .background {
+      // The window is click-through except over the sample and its bar.
+      GeometryReader { proxy in
+        Color.clear
+          .onAppear { InvisibleWindow.shared?.clickableRect = proxy.frame(in: .global) }
+          .onChange(of: proxy.frame(in: .global)) { _, frame in
+            InvisibleWindow.shared?.clickableRect = frame
+          }
+          .onDisappear { InvisibleWindow.shared?.clickableRect = nil }
+      }
+    }
+    .position(x: center.x - origin.x, y: center.y + shift - origin.y)
+    .gesture(
+      DragGesture(minimumDistance: 2, coordinateSpace: .global)
+        .onChanged { drag in
+          let start = dragStart ?? center
+          dragStart = start
+          let target = CGPoint(x: start.x + drag.translation.width, y: start.y + drag.translation.height)
+          dragSpot = CaptionSpot(
+            x: min(max((target.x - visible.minX) / visible.width, 0), 1),
+            y: min(max((target.y - visible.minY) / visible.height, 0), 1)
+          )
+        }
+        .onEnded { _ in
+          if let dragSpot { $hexSettings.withLock { $0.liveCaptionSpot = dragSpot } }
+          dragSpot = nil
+          dragStart = nil
+        }
+    )
+  }
+
+  private var captionPlacement: CaptionPlacement { store.hexSettings.liveCaptionPlacement }
+
+  /// The sample caption shows only between dictations: never while recording or processing.
+  private var showsPlacingSample: Bool {
+    store.isPlacingCaption && !store.isRecording && !store.isProcessing
+  }
+
+  var body: some View {
+    ZStack(alignment: .top) {
+      indicatorColumn
+      if captionPlacement != .underIndicator || showsPlacingSample {
+        floatingCaptionLayer
+      }
     }
     .onChange(of: store.hexSettings.rewriteMode) { _, mode in
       show(.modeChanged(mode))

@@ -268,15 +268,11 @@ private struct CurrentModelSummary: View {
 	let onCancelDownload: () -> Void
 
 	var body: some View {
-		HStack(spacing: 12) {
-			Image(systemName: iconName)
-				.font(.title3)
-				.foregroundStyle(needsDownload ? Color.orange : Color.accentColor)
-				.frame(width: 28)
+		HStack(spacing: 10) {
+			SettingsTile(symbol: iconName, color: needsDownload ? Color.orange : Color.purple)
 
-			VStack(alignment: .leading, spacing: 5) {
+			VStack(alignment: .leading, spacing: 2) {
 				Text(title)
-					.font(.body.weight(.medium))
 				Text(subtitle)
 					.font(.caption)
 					.foregroundStyle(needsDownload ? Color.orange : Color.secondary)
@@ -319,8 +315,6 @@ private struct CurrentModelSummary: View {
 				}
 			}
 		}
-		.padding(10)
-		.background(Color(NSColor.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 	}
 
 	/// The selection references a model that isn't on disk (e.g. the scan came
@@ -344,7 +338,7 @@ private struct CurrentModelSummary: View {
 
 	private var subtitle: String {
 		if needsDownload { return "Not downloaded — transcription won't work until you download it." }
-		if let model { return "\(model.size) · \(model.storageSize)" }
+		if let model { return "\(modelDescriptor(model)) · On this Mac" }
 		if selectedModelName != nil { return "Installed local model" }
 		if let downloadingModel { return "\(downloadingModel.storageSize) will be stored locally on this Mac." }
 		return "Download a local model to start transcribing."
@@ -353,6 +347,13 @@ private struct CurrentModelSummary: View {
 	private var activeDownloadStatus: String? {
 		guard selectedModelName != nil, let downloadingModel else { return nil }
 		return "Downloading \(downloadingModel.displayName)…"
+	}
+
+	/// "Most accurate (English)" for a badged model, else its language ("English", "Multilingual").
+	private func modelDescriptor(_ model: CuratedModelInfo) -> String {
+		guard let badge = model.badge else { return model.size }
+		let sentence = badge.lowercased().replacingOccurrences(of: "english", with: "English")
+		return sentence.prefix(1).uppercased() + sentence.dropFirst()
 	}
 
 	private var iconName: String {

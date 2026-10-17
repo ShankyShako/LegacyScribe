@@ -12,9 +12,15 @@ struct SettingsView: View {
   
 	var body: some View {
 		Form {
-			if microphonePermission != .granted
+			let permissionsMissing = microphonePermission != .granted
 				|| accessibilityPermission != .granted
-				|| inputMonitoringPermission != .granted {
+				|| inputMonitoringPermission != .granted
+
+			Section {
+				SettingsStatusHeader(store: store, permissionsMissing: permissionsMissing)
+			}
+
+			if permissionsMissing {
 				PermissionsSectionView(
 					store: store,
 					microphonePermission: microphonePermission,
@@ -37,14 +43,20 @@ struct SettingsView: View {
 			}
 
 			SoundSectionView(store: store)
+			if store.liveCaptionAvailable {
+				LiveCaptionSectionView(store: store)
+			}
 			GeneralSectionView(store: store)
 			HistorySectionView(store: store)
+			NotesSectionView(store: store)
 			SpeechCoachSectionView(store: store)
 		}
 		.formStyle(.grouped)
 		.task {
 			await store.send(.task).finish()
 		}
+		// Placing mode ends with the Settings window.
+		.onDisappear { store.send(.setPlacingCaption(false)) }
 		.enableInjection()
 	}
 }

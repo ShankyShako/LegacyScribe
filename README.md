@@ -51,6 +51,16 @@ Until one is set up, dictations are pasted as heard. If the AI fails or is slow,
 
 The indicator turns blue while transcribing and purple while rewriting, and a small label shows mode changes and fallbacks.
 
+## Install
+
+Apple Silicon and macOS 26 or later. In Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShankyShako/LegacyScribe/main/install.sh | bash
+```
+
+It downloads the latest release, checks that the app is signed by LegacyScribe's team, puts it in Applications and opens it. The app isn't signed with an Apple Developer ID yet, so a copy downloaded with a browser is blocked by macOS; if you'd rather do that, open it once, then go to System Settings → Privacy & Security and press **Open Anyway**.
+
 ## Getting started
 
 1. Open LegacyScribe and allow Microphone, Accessibility and Input Monitoring when asked.
@@ -82,7 +92,7 @@ On first launch, grant Microphone, Accessibility and Input Monitoring in System 
 
 Release builds check this repo's latest GitHub release once a day (Sparkle). An update found in the background shows up as a notification and an "Install Update…" item in the menu bar menu; Settings → About has a manual check and the automatic-install toggle. Debug builds don't update.
 
-To ship one: optionally write `release-notes/<version>.md` (copy `release-notes/TEMPLATE.md`), then run `tools/release.sh <version>` (bumps the version, builds, zips, writes the signed appcast, commits and tags) and `tools/release.sh --publish <version>` (pushes and creates the GitHub release; needs `gh`). Updates are signed with an EdDSA key in the login Keychain; back it up with `generate_keys --account com.genovamongalo.LegacyScribe -x <file>`. A copy downloaded with a browser is quarantined, so the first install on another Mac needs right-click → Open; updates after that aren't.
+To ship one: optionally write `release-notes/<version>.md` (copy `release-notes/TEMPLATE.md`), then run `tools/release.sh <version>` (bumps the version, builds, zips, writes the signed appcast, commits and tags) and `tools/release.sh --publish <version>` (pushes and creates the GitHub release; needs `gh`). Updates are signed with an EdDSA key in the login Keychain; back it up with `generate_keys --account com.genovamongalo.LegacyScribe -x <file>`. A copy downloaded with a browser is quarantined, so the first install on another Mac needs System Settings → Privacy & Security → Open Anyway (or `install.sh`, which downloads with curl and checks the signature itself); updates after that aren't quarantined.
 
 ## Tests
 
@@ -94,7 +104,7 @@ tools/notes-crashtest.py <10-min.wav>   # Notes: kill -9 at each stage, forced r
 
 ## Data
 
-History, audio, models, practice recordings and notes sessions live in `~/Library/Application Support/LegacyScribe/`. History, word timings and sent edits are in `scribe.sqlite` (open it with `sqlite3`). Apart from model downloads and update checks, the only thing that leaves the Mac is text sent to the rewrite endpoints you configure, and in Private mode nothing does.
+History, audio, models, practice recordings and notes sessions live in `~/Library/Application Support/LegacyScribe/`. History, word timings and sent edits are in `scribe.sqlite` (open it with `sqlite3`). Apart from model downloads and update checks, the only thing that leaves the Mac is text sent to the rewrite endpoints you configure, and in Private mode nothing does. [`PRIVACY.md`](PRIVACY.md) lists everything that is stored, read and sent.
 
 ## Benchmarks
 

@@ -25,6 +25,7 @@ struct LanguageSectionView: View {
 		} icon: {
 			Image(systemName: "globe")
 		}
+		.labelStyle(.tile(.blue))
 		.enableInjection()
 	}
 }

@@ -22,8 +22,23 @@ struct NotesFeature {
 		var voiceLearning: Double?
 		var voiceError: String?
 		var confirmingForgetVoice = false
+		/// Other people's voiceprints, named in transcripts.
+		var rememberedVoices: [Voiceprint] = []
+		/// The remembered person waiting for the Forget confirmation.
+		var confirmingForgetPersonID: String?
+		var speakerNameError: String?
+		/// Trim mode (DESIGN.md "Notes trimming"): the transcript's sentences can be selected and left out.
+		var trimming = false
+		var trimSelection: TrimSelection?
+		var trimError: String?
 		@Shared(.hexSettings) var hexSettings: HexSettings
 		@Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
+
+		mutating func resetTrim() {
+			trimming = false
+			trimSelection = nil
+			trimError = nil
+		}
 
 		var selected: NotesSessionSummary? {
 			sessions.first { $0.id == selectedID }
@@ -33,6 +48,20 @@ struct NotesFeature {
 		var canEditTranscript: Bool {
 			guard let session = selected?.session else { return false }
 			return session.stage == .done || (session.stage == .noting && session.notesError != nil)
+		}
+	}
+
+	/// The sentences from `start` to `end`, both inclusive and in order. `anchor` is where the selection was
+	/// begun (`a`): a shift-click extends from it, whichever end it is.
+	struct TrimSelection: Equatable {
+		var start: NotesTrimPoint
+		var end: NotesTrimPoint
+		var anchor: NotesTrimPoint
+
+		init(_ a: NotesTrimPoint, _ b: NotesTrimPoint) {
+			start = min(a, b)
+			end = max(a, b)
+			anchor = a
 		}
 	}
 
@@ -73,6 +102,19 @@ struct NotesFeature {
 		case voiceLearningFailed(String)
 		case requestForgetVoice
 		case confirmForgetVoice
+		case nameSpeaker(speaker: Int, name: String, remember: Bool)
+		case speakerNamingFailed(String)
+		case rememberedVoicesLoaded([Voiceprint])
+		case requestForgetPerson(String)
+		case confirmForgetPerson
+		case beginTrim
+		case endTrim
+		case selectSentences(from: NotesTrimPoint, to: NotesTrimPoint)
+		/// Shift-click: the selection runs from where it began to this sentence.
+		case extendSelection(to: NotesTrimPoint)
+		case leaveOutSelection
+		case bringBack(Int)
+		case trimFailed(String)
 	}
 
 	@Dependency(\.notes) var notes
@@ -89,6 +131,7 @@ struct NotesFeature {
 				return .merge(
 					.send(.reload),
 					.run { send in await send(.voiceprintLoaded(await notes.voiceprint())) },
+					.run { send in await send(.rememberedVoicesLoaded(await notes.rememberedVoices())) },
 					.run { send in
 						for await event in notes.events() {
 							if case .changed = event { await send(.reload) }
@@ -119,6 +162,8 @@ struct NotesFeature {
 				state.content = nil
 				state.transcriptDraft = nil
 				state.transcriptError = nil
+				state.speakerNameError = nil
+				state.resetTrim()
 				guard let id else { return .none }
 				return .run { send in
 					await send(.contentLoaded(id: id, await notes.content(id)))
@@ -156,7 +201,9 @@ struct NotesFeature {
 			case .editTranscript:
 				guard state.canEditTranscript, let content = state.content else { return .none }
 				state.showing = .transcript
-				state.transcriptDraft = content.transcript
+				// The whole transcript, left-out stretches included: saving re-anchors the trims to the edit.
+				state.resetTrim()
+				state.transcriptDraft = content.fullTranscript
 				state.transcriptError = nil
 				return .none
 
@@ -287,6 +334,95 @@ struct NotesFeature {
 						HexLog.notes.error("Forgetting the voiceprint failed: \(error.localizedDescription, privacy: .public)")
 					}
 					await send(.voiceprintLoaded(await notes.voiceprint()))
+				}
+
+			case let .nameSpeaker(speaker, name, remember):
+				guard let id = state.selectedID else { return .none }
+				state.speakerNameError = nil
+				return .run { send in
+					do {
+						try await notes.nameSpeaker(id, speaker, name, remember)
+					} catch {
+						HexLog.notes.error("Naming a speaker failed: \(error.localizedDescription, privacy: .public)")
+						await send(.speakerNamingFailed(error.localizedDescription))
+					}
+					await send(.rememberedVoicesLoaded(await notes.rememberedVoices()))
+					await send(.reload)
+				}
+
+			case let .speakerNamingFailed(message):
+				state.speakerNameError = message
+				return .none
+
+			case let .rememberedVoicesLoaded(voices):
+				state.rememberedVoices = voices
+				return .none
+
+			case let .requestForgetPerson(voiceprintID):
+				state.confirmingForgetPersonID = voiceprintID
+				return .none
+
+			case .beginTrim:
+				guard state.canEditTranscript, state.content != nil, state.transcriptDraft == nil else { return .none }
+				state.showing = .transcript
+				state.trimming = true
+				state.trimSelection = nil
+				state.trimError = nil
+				return .none
+
+			case .endTrim:
+				state.resetTrim()
+				return .none
+
+			case let .selectSentences(from, to):
+				guard state.trimming else { return .none }
+				state.trimSelection = TrimSelection(from, to)
+				return .none
+
+			case let .extendSelection(to):
+				guard state.trimming else { return .none }
+				state.trimSelection = TrimSelection(state.trimSelection?.anchor ?? to, to)
+				return .none
+
+			case .leaveOutSelection:
+				guard state.trimming, let selection = state.trimSelection, let id = state.selectedID else { return .none }
+				state.trimSelection = nil
+				state.trimError = nil
+				return .run { send in
+					do {
+						try await notes.leaveOut(id, selection.start, selection.end)
+						await send(.reload)
+					} catch {
+						await send(.trimFailed(error.localizedDescription))
+					}
+				}
+
+			case let .bringBack(index):
+				guard let id = state.selectedID else { return .none }
+				state.trimError = nil
+				return .run { send in
+					do {
+						try await notes.bringBack(id, index)
+						await send(.reload)
+					} catch {
+						await send(.trimFailed(error.localizedDescription))
+					}
+				}
+
+			case let .trimFailed(message):
+				state.trimError = message
+				return .none
+
+			case .confirmForgetPerson:
+				guard let voiceprintID = state.confirmingForgetPersonID else { return .none }
+				state.confirmingForgetPersonID = nil
+				return .run { send in
+					do {
+						try await notes.forgetRememberedVoice(voiceprintID)
+					} catch {
+						HexLog.notes.error("Forgetting a remembered voice failed: \(error.localizedDescription, privacy: .public)")
+					}
+					await send(.rememberedVoicesLoaded(await notes.rememberedVoices()))
 				}
 			}
 		}

@@ -1,5 +1,5 @@
 {
-  "originHash" : "4a63622ce53359b253f8ee10ae89f02d961405f2a61f9f3489c3f6b0c53ecbee",
+  "originHash" : "5fd59e000f116683dd7f1473783a50c7bc829dee5da50e1a4ed475b68a6c3a07",
   "pins" : [
     {
       "identity" : "combine-schedulers",
@@ -61,6 +61,15 @@
       "state" : {
         "revision" : "3b339ad6e3b3f44c8121ecff5131c7fd55e075e6",
         "version" : "3.32.3"
+      }
+    },
+    {
+      "identity" : "phonon-coreml",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/fermionresearch/phonon-coreml.git",
+      "state" : {
+        "revision" : "bf59e574639b060e30ee1a3f9c0e003fed5744c8",
+        "version" : "1.1.2"
       }
     },
     {

@@ -10,21 +10,7 @@ struct GeneralSectionView: View {
 	var body: some View {
 		Section {
 			Label {
-				Toggle(
-					"Private Mode",
-					isOn: Binding(
-						get: { store.hexSettings.privateMode },
-						set: { store.send(.setPrivateMode($0)) }
-					)
-				)
-				Text("Nothing leaves this Mac: only the on-device model rewrites (other AIs are skipped and the text is pasted as heard), and there are no downloads, update checks or connection checks. Also in the menu bar menu.")
-					.settingsCaption()
-			} icon: {
-				Image(systemName: "lock.fill")
-			}
-
-			Label {
-				Toggle("Open on Login",
+				Toggle("Open at login",
 				       isOn: Binding(
 				       	get: { store.hexSettings.openOnLogin },
 				       	set: { store.send(.toggleOpenOnLogin($0)) }
@@ -32,10 +18,11 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "arrow.right.circle")
 			}
+			.labelStyle(.tile(.green))
 
 			Label {
 				Toggle(
-					"Show Dock Icon",
+					"Show Dock icon",
 					isOn: Binding(
 						get: { store.hexSettings.showDockIcon },
 						set: { store.send(.toggleShowDockIcon($0)) }
@@ -44,6 +31,7 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "dock.rectangle")
 			}
+			.labelStyle(.tile(.brown))
 
 			Label {
 				Toggle(
@@ -53,10 +41,12 @@ struct GeneralSectionView: View {
 						set: { store.send(.setUseClipboardPaste($0)) }
 					)
 				)
-				Text("Use clipboard to insert text. Fast but may not restore all clipboard content.\nTurn off to use simulated keypresses. Slower, but doesn't need to restore clipboard")
+				Text("Fast, but some clipboard contents may not come back afterwards. Off, the text is typed as key presses: slower, and the clipboard is untouched.")
+					.settingsCaption()
 			} icon: {
 				Image(systemName: "doc.on.doc.fill")
 			}
+			.labelStyle(.tile(.cyan))
 
 			Label {
 				Toggle(
@@ -71,6 +61,7 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "text.cursor")
 			}
+			.labelStyle(.tile(.purple))
 
 			Label {
 				Toggle(
@@ -85,6 +76,7 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "link")
 			}
+			.labelStyle(.tile(.blue))
 
 			Label {
 				Toggle(
@@ -94,14 +86,16 @@ struct GeneralSectionView: View {
 						set: { store.send(.setCopyToClipboard($0)) }
 					)
 				)
-				Text("Copy transcription text to clipboard in addition to pasting it")
+				Text("Also leaves the text on the clipboard after pasting it.")
+					.settingsCaption()
 			} icon: {
 				Image(systemName: "doc.on.clipboard")
 			}
+			.labelStyle(.tile(.settingsTileGray))
 
 			Label {
 				Toggle(
-					"Prevent System Sleep while Recording",
+					"Keep the Mac awake while recording",
 					isOn: Binding(
 						get: { store.hexSettings.preventSystemSleep },
 						set: { store.send(.togglePreventSystemSleep($0)) }
@@ -110,6 +104,7 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "zzz")
 			}
+			.labelStyle(.tile(.indigo))
 
 			Label {
 				Toggle(
@@ -120,9 +115,11 @@ struct GeneralSectionView: View {
 					)
 				)
 				Text("Recording starts about 0.2 s sooner and keeps the half second before you press the key. macOS shows the microphone indicator the whole time this is on.")
+					.settingsCaption()
 			} icon: {
 				Image(systemName: "bolt.circle")
 			}
+			.labelStyle(.tile(.orange))
 
 			Label {
 				HStack {
@@ -133,10 +130,10 @@ struct GeneralSectionView: View {
 						set: { store.send(.setCancelUndoSeconds($0)) }
 					)) {
 						Text("Off").tag(0)
-						Text("10 seconds").tag(10)
-						Text("30 seconds").tag(30)
-						Text("1 minute").tag(60)
-						Text("2 minutes").tag(120)
+						Text("10 s").tag(10)
+						Text("30 s").tag(30)
+						Text("1 min").tag(60)
+						Text("2 min").tag(120)
 					}
 					.pickerStyle(.menu)
 					.frame(width: 120)
@@ -146,20 +143,21 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "arrow.uturn.backward")
 			}
+			.labelStyle(.tile(.red))
 
 			Label {
 				HStack(alignment: .center) {
-					Text("Audio Behavior while Recording")
+					Text("Other audio while recording")
 				Spacer()
 					Picker("", selection: Binding(
 						get: { store.hexSettings.recordingAudioBehavior },
 						set: { store.send(.setRecordingAudioBehavior($0)) }
 					)) {
-						Label("Pause Media", systemImage: "pause")
+						Label("Pause media", systemImage: "pause")
 							.tag(RecordingAudioBehavior.pauseMedia)
-						Label("Mute Volume", systemImage: "speaker.slash")
+						Label("Mute", systemImage: "speaker.slash")
 							.tag(RecordingAudioBehavior.mute)
-						Label("Do Nothing", systemImage: "hand.raised.slash")
+						Label("Leave it playing", systemImage: "hand.raised.slash")
 							.tag(RecordingAudioBehavior.doNothing)
 					}
 					.pickerStyle(.menu)
@@ -167,6 +165,7 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "speaker.wave.2")
 			}
+			.labelStyle(.tile(.pink))
 		} header: {
 			Text("General")
 		}

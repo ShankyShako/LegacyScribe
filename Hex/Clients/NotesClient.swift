@@ -19,6 +19,8 @@ struct NotesSessionSummary: Equatable, Identifiable, Sendable {
 	var approximateSeconds: TimeInterval
 	/// Speakers heard (`SpeakerRegistry.speakerCount`); labels show only when it is over 1.
 	var speakerCount: Int = 0
+	/// Stretches were left out or brought back since the notes were written (`NotesSession.notesStale`).
+	var notesStale = false
 }
 
 struct NotesProgress: Equatable, Sendable {
@@ -33,6 +35,40 @@ struct NotesContent: Equatable, Sendable {
 	var speakerCount: Int = 0
 	/// The transcript's paragraphs with their speakers, for the Transcript tab; empty unless `speakerCount > 1`.
 	var speakerParagraphs: [NotesSpeakerParagraph] = []
+	/// The whole transcript, left-out stretches included, one paragraph per line or turn: what Edit shows.
+	/// `transcript` leaves the trims out, so Copy and Export omit them.
+	var fullTranscript: String = ""
+	/// Every sentence in order with its place on the timeline, for the Transcript tab and the Trim strip.
+	var sentences: [NotesSentenceItem] = []
+	/// The left-out stretches, in order.
+	var trims: [NotesTrimRow] = []
+	/// The notes were written before the latest trim change.
+	var notesStale = false
+	/// Recorded time; nil while the session is still recording.
+	var sessionSeconds: Double?
+}
+
+/// One sentence of the transcript as the Transcript tab and the Trim strip use it.
+struct NotesSentenceItem: Equatable, Sendable {
+	var point: NotesTrimPoint
+	var text: String
+	/// First sentence of its speaker turn or chunk.
+	var startsParagraph: Bool
+	/// The paragraph's speaker and chip fields (`text` is empty).
+	var paragraph: NotesSpeakerParagraph
+	/// Estimated seconds from the session's start.
+	var start: Double
+	var end: Double
+	/// Index in `NotesContent.trims` of the stretch leaving this sentence out.
+	var trimIndex: Int?
+}
+
+/// A left-out stretch with its estimated place and first words.
+struct NotesTrimRow: Equatable, Sendable {
+	var index: Int
+	var start: Double
+	var end: Double
+	var gist: String
 }
 
 /// One paragraph of a labelled transcript as the Transcript tab draws it.
@@ -42,8 +78,18 @@ struct NotesSpeakerParagraph: Equatable, Sendable {
 	var label: String?
 	/// The user's own voiceprint speaker ("You").
 	var isUser: Bool
+	/// Shown as "You" because the user named the speaker "Me", not recognised by voice: it can be renamed.
+	var markedAsUser: Bool = false
 	var text: String
 	var overlapping: Bool
+	/// The speaker's speech in the whole session, for the naming popover.
+	var seconds: Double = 0
+	/// Matched to a remembered person's voiceprint when the session started ("Recognised by voice").
+	var recognised: Bool = false
+	/// Named in this session with the voice saved for future sessions.
+	var voiceSaved: Bool = false
+	/// A remembered person's stored voiceprint: their colour is fixed by it in every session and in Settings.
+	var voiceprintID: String?
 }
 
 enum NotesEvent: Equatable, Sendable {
@@ -62,6 +108,7 @@ enum NotesError: Error, LocalizedError, Equatable {
 	case alreadyRecording
 	case recordingNow
 	case writingNotes
+	case transcriptIncomplete
 
 	var errorDescription: String? {
 		switch self {
@@ -69,6 +116,7 @@ enum NotesError: Error, LocalizedError, Equatable {
 		case .alreadyRecording: "A notes session is already recording"
 		case .recordingNow: "Stop the session first"
 		case .writingNotes: "Wait until the notes are written"
+		case .transcriptIncomplete: "Wait until the transcript is complete"
 		}
 	}
 }
@@ -92,6 +140,11 @@ struct NotesClient {
 	/// Replaces a finished session's transcript with the user's edit (one paragraph per chunk) and writes
 	/// the notes again from it.
 	var saveTranscript: @Sendable (_ id: String, _ text: String) async throws -> Void
+	/// Leaves the sentences from `from` to `to` out of the notes (`NotesTrims`). The transcript is untouched and
+	/// the notes are not rewritten: the user does that with "Write notes again".
+	var leaveOut: @Sendable (_ id: String, _ from: NotesTrimPoint, _ to: NotesTrimPoint) async throws -> Void
+	/// Puts the trim at `index` back into the notes.
+	var bringBack: @Sendable (_ id: String, _ index: Int) async throws -> Void
 	var list: @Sendable () async -> [NotesSessionSummary] = { [] }
 	var content: @Sendable (_ id: String) async -> NotesContent = { _ in NotesContent(notes: nil, transcript: "") }
 	var delete: @Sendable (_ id: String) async throws -> Void
@@ -102,6 +155,13 @@ struct NotesClient {
 	var voiceprint: @Sendable () async -> Voiceprint? = { nil }
 	/// Forgets the user's voiceprint. Notes and transcripts are untouched.
 	var deleteVoiceprint: @Sendable () async throws -> Void
+	/// Names a speaker of a session (`SpeakerNaming`): stored in its `speakers.json`; with `remember`, the
+	/// voice is saved so later sessions recognise it.
+	var nameSpeaker: @Sendable (_ id: String, _ speaker: Int, _ name: String, _ remember: Bool) async throws -> Void
+	/// Other people's voiceprints, named in notes transcripts.
+	var rememberedVoices: @Sendable () async -> [Voiceprint] = { [] }
+	/// Forgets one of them. Transcripts keep the name.
+	var forgetRememberedVoice: @Sendable (_ voiceprintID: String) async throws -> Void
 }
 
 extension NotesClient: DependencyKey {
@@ -116,12 +176,17 @@ extension NotesClient: DependencyKey {
 			resumeUnfinished: { await engine.resumeUnfinished() },
 			retryNotes: { await engine.retryNotes($0) },
 			saveTranscript: { try await engine.saveTranscript($0, text: $1) },
+			leaveOut: { try await engine.leaveOut($0, from: $1, to: $2) },
+			bringBack: { try await engine.bringBack($0, index: $1) },
 			list: { await engine.list() },
 			content: { await engine.content($0) },
 			delete: { try await engine.delete($0) },
 			enrolVoiceprint: { try await engine.enrolVoiceprint(history: $0, progress: $1) },
 			voiceprint: { await engine.voiceprint() },
-			deleteVoiceprint: { try await engine.deleteVoiceprint() }
+			deleteVoiceprint: { try await engine.deleteVoiceprint() },
+			nameSpeaker: { try await engine.nameSpeaker($0, speaker: $1, name: $2, remember: $3) },
+			rememberedVoices: { await engine.rememberedVoices() },
+			forgetRememberedVoice: { try await engine.forgetRememberedVoice($0) }
 		)
 	}
 }
@@ -218,14 +283,22 @@ actor NotesEngine {
 		VoiceprintStore(directory: .voiceprintsFolderURL)
 	}
 
-	/// A new session's speakers: the stored voiceprints, the user's first ("You").
+	/// A new session's speakers: the stored voiceprints, the user's first ("You"). A person saved as "Me"
+	/// is the user too, so once the user's own voice is learned it isn't seeded beside it.
 	private func seededRegistry() -> SpeakerRegistry {
-		SpeakerRegistry(voiceprints: voiceprints.all())
+		let all = voiceprints.all()
+		let hasUser = all.contains(where: \.isUser)
+		return SpeakerRegistry(voiceprints: all.filter { $0.isUser || !(hasUser && SpeakerRegistry.isSelfName($0.name)) })
 	}
 
 	/// The session's speakers: in memory while it is unfinished, else from `speakers.json`.
 	private func registry(_ id: String) -> SpeakerRegistry? {
 		registries[id] ?? folder(id).loadSpeakers()
+	}
+
+	/// The speakers as the transcript, notes and edits show them: strays, repeated names and "Me" merged.
+	private func shownRegistry(_ id: String) -> SpeakerRegistry? {
+		registry(id)?.consolidated()
 	}
 
 	nonisolated func wake() {
@@ -453,15 +526,19 @@ actor NotesEngine {
 		guard sessions[id] != nil else { return }
 		// Speakers are saved before the transcript: a registry ahead of the transcript is harmless, one
 		// behind it would renumber speakers after a crash.
-		if let registry, registry != registries[id] {
-			do {
-				try folder.saveSpeakers(registry)
-			} catch {
-				logger.error("Notes speakers of \(id, privacy: .public) not saved: \(error.localizedDescription, privacy: .public)")
-				park(id, error: "The transcript couldn't be saved: \(error.localizedDescription)")
-				return
+		// A speaker named while this chunk was transcribed keeps the name.
+		if var registry {
+			if let current = registries[id] { registry.adoptNames(from: current) }
+			if registry != registries[id] {
+				do {
+					try folder.saveSpeakers(registry)
+				} catch {
+					logger.error("Notes speakers of \(id, privacy: .public) not saved: \(error.localizedDescription, privacy: .public)")
+					park(id, error: "The transcript couldn't be saved: \(error.localizedDescription)")
+					return
+				}
+				registries[id] = registry
 			}
-			registries[id] = registry
 		}
 		if id == capturingID, !silenceReported,
 		   silence.record(seconds: Double(samples?.count ?? 0) / Double(NotesChunker.sampleRate), speech: spoke) {
@@ -471,6 +548,8 @@ actor NotesEngine {
 		}
 
 		transcript = transcripts[id] ?? transcript
+		// The chunk's length, for the Trim timeline; absent when its file couldn't be read.
+		line.seconds = samples.map { Double($0.count) / Double(NotesChunker.sampleRate) }
 		transcript.add(line)
 		do {
 			try folder.transcript.commit(transcript)
@@ -629,9 +708,11 @@ actor NotesEngine {
 		let folder = folder(id)
 		let transcript = transcripts[id] ?? folder.transcript.load()
 		// Sessions transcribed before the loop check (or edited back in) may still hold looped chunks.
-		let pieces = NotesPrompts.pieces(transcript.lines.filter { !NotesSpeech.looksLooped($0.text ?? "") })
+		// What the user left out (`trims.json`) is not written about; the version is recorded with the notes.
+		let trims = folder.loadTrims()
+		let pieces = NotesPrompts.pieces(trims.applied(to: transcript).filter { !NotesSpeech.looksLooped($0.text ?? "") })
 		// Labels only when more than one speaker was heard, so a solo session's notes are written as before.
-		let labels = registry(id)?.transcriptLabels
+		let labels = shownRegistry(id)?.transcriptLabels
 		let model = (hexSettings.notesWriter == .onDevice ? hexSettings.notesLocalModel : hexSettings.notesModel)
 			.trimmingCharacters(in: .whitespaces)
 		let saved = folder.savedParts()
@@ -685,6 +766,7 @@ actor NotesEngine {
 			$0.stage = .done
 			$0.notesModel = model
 			$0.notesError = nil
+			$0.notesTrimsVersion = trims.version
 		}
 		sessions[id] = nil
 		transcripts[id] = nil
@@ -826,31 +908,82 @@ actor NotesEngine {
 				progress: progress[id],
 				approximateSeconds: session.endedAt.map { $0.timeIntervalSince(session.startedAt) }
 					?? Double(chunks) * Double(NotesChunker.maxSeconds + NotesChunker.minSeconds) / 2,
-				speakerCount: registry(id)?.speakerCount ?? 0
+				speakerCount: shownRegistry(id)?.speakerCount ?? 0,
+				notesStale: session.notesStale(trimsVersion: folder.loadTrims().version)
 			)
 		}
 	}
 
 	func content(_ id: String) -> NotesContent {
 		let folder = folder(id)
-		let registry = registry(id)
+		let registry = shownRegistry(id)
 		let transcript = transcripts[id] ?? folder.transcript.load()
 		let labels = registry?.transcriptLabels
+		let trims = folder.loadTrims()
+		let session = sessions[id] ?? folder.loadManifest()
+		let sessionSeconds = session?.endedAt.map { $0.timeIntervalSince(session!.startedAt) }
+		let timeline = NotesTimeline.build(transcript, trims: trims, sessionSeconds: sessionSeconds)
+		let sentences = NotesTrims.sentences(of: transcript)
 		return NotesContent(
 			notes: try? String(contentsOf: folder.notesURL, encoding: .utf8),
-			transcript: transcript.paragraphs(labels: labels),
+			transcript: NotesTranscript(lines: trims.applied(to: transcript)).paragraphs(labels: labels),
 			speakerCount: registry?.speakerCount ?? 0,
-			speakerParagraphs: labels == nil ? [] : transcript.speakerParagraphs.map { paragraph in
-				let speaker = paragraph.speaker.flatMap { registry?.speaker($0) }
-				return NotesSpeakerParagraph(
-					speaker: speaker?.id,
-					label: speaker.map { registry!.label($0.id) },
-					isUser: speaker?.voiceprintID == Voiceprint.userID,
-					text: paragraph.text,
-					overlapping: paragraph.overlapping
+			speakerParagraphs: labels == nil ? [] : transcript.speakerParagraphs.map {
+				Self.paragraph(speaker: $0.speaker, text: $0.text, overlapping: $0.overlapping, registry: registry)
+			},
+			fullTranscript: transcript.paragraphs(labels: labels),
+			sentences: Self.sentenceItems(transcript, sentences: sentences, timeline: timeline, labelled: labels != nil, registry: registry),
+			trims: trims.trims.enumerated().map { index, trim in
+				let span = timeline.filter { $0.trimIndex == index }
+				return NotesTrimRow(
+					index: index, start: span.first?.start ?? 0, end: span.last?.end ?? 0,
+					gist: NotesTrims.gist(of: trim, in: sentences)
 				)
-			}
+			},
+			notesStale: session?.notesStale(trimsVersion: trims.version) ?? false,
+			sessionSeconds: sessionSeconds
 		)
+	}
+
+	/// A paragraph's chip fields; the unlabelled form (no speaker) when `registry` has none.
+	private static func paragraph(speaker: Int?, text: String, overlapping: Bool, registry: SpeakerRegistry?) -> NotesSpeakerParagraph {
+		let speaker = speaker.flatMap { registry?.speaker($0) }
+		let remembered = speaker.map { $0.voiceprintID != nil && $0.voiceprintID != Voiceprint.userID } ?? false
+		return NotesSpeakerParagraph(
+			speaker: speaker?.id,
+			label: speaker.map { registry!.label($0.id) },
+			isUser: speaker?.voiceprintID == Voiceprint.userID,
+			markedAsUser: speaker.map { $0.voiceprintID == Voiceprint.userID && !$0.fixed } ?? false,
+			text: text,
+			overlapping: overlapping,
+			seconds: speaker.map { registry!.seconds(of: $0.id) } ?? 0,
+			recognised: remembered && speaker?.fixed == true,
+			voiceSaved: remembered && speaker?.fixed == false,
+			voiceprintID: remembered ? speaker?.voiceprintID : nil
+		)
+	}
+
+	/// The Transcript tab's sentences. Chips only when the session is labelled (`labelled`).
+	private static func sentenceItems(
+		_ transcript: NotesTranscript, sentences: [NotesSentence], timeline: [NotesTimelineSentence],
+		labelled: Bool, registry: SpeakerRegistry?
+	) -> [NotesSentenceItem] {
+		let lines = Dictionary(transcript.lines.map { ($0.chunk, $0) }, uniquingKeysWith: { first, _ in first })
+		return zip(sentences, timeline).map { sentence, placed in
+			let turns = lines[sentence.point.chunk]?.turns
+			let overlapping = turns.flatMap { $0.indices.contains(sentence.point.turn) ? $0[sentence.point.turn].isOverlapping : nil } ?? false
+			return NotesSentenceItem(
+				point: sentence.point,
+				text: sentence.text,
+				startsParagraph: sentence.point.sentence == 0,
+				paragraph: paragraph(
+					speaker: labelled ? sentence.speaker : nil, text: "", overlapping: overlapping, registry: labelled ? registry : nil
+				),
+				start: placed.start,
+				end: placed.end,
+				trimIndex: placed.trimIndex
+			)
+		}
 	}
 
 	func saveTranscript(_ id: String, text: String) throws {
@@ -860,15 +993,53 @@ actor NotesEngine {
 		// Only once the transcript is complete and no notes are being written from it.
 		let idle = sessions[id] == nil || parked.contains(id)
 		guard idle, session.stage == .done || session.stage == .noting else { throw NotesError.writingNotes }
-		let transcript = (transcripts[id] ?? folder.transcript.load()).edited(text, registry: registry(id))
+		let transcript = (transcripts[id] ?? folder.transcript.load()).edited(text, registry: shownRegistry(id))
 		try folder.transcript.commitEdit(transcript)
 		if sessions[id] != nil { transcripts[id] = transcript }
+		// The left-out stretches follow their sentences into the edited transcript; one whose first or last
+		// sentence was edited is dropped.
+		let before = folder.loadTrims()
+		let trims = before.reanchored(to: transcript)
+		if trims != before {
+			do {
+				try folder.saveTrims(trims)
+			} catch {
+				logger.error("Notes trims of \(id, privacy: .public) not saved after an edit: \(error.localizedDescription, privacy: .public)")
+			}
+		}
 		// Parts written from the old transcript must not be reused.
 		for part in folder.savedParts() {
 			FileManager.default.removeItemIfExists(at: folder.partURL(part))
 		}
 		logger.notice("Notes transcript of \(id, privacy: .public) edited, \(transcript.lines.count) paragraphs")
 		retryNotes(id)
+	}
+
+	/// Leaves a stretch out of the notes. Only the layer in `trims.json` changes; notes are written again on request.
+	func leaveOut(_ id: String, from: NotesTrimPoint, to: NotesTrimPoint) throws {
+		let folder = try trimmableFolder(id)
+		var trims = folder.loadTrims()
+		trims.leaveOut(from: from, to: to, in: transcripts[id] ?? folder.transcript.load())
+		try folder.saveTrims(trims)
+		logger.notice("Notes session \(id, privacy: .public): a stretch left out, \(trims.trims.count) in all")
+		events.yield(.changed(id))
+	}
+
+	func bringBack(_ id: String, index: Int) throws {
+		let folder = try trimmableFolder(id)
+		var trims = folder.loadTrims()
+		trims.bringBack(at: index)
+		try folder.saveTrims(trims)
+		logger.notice("Notes session \(id, privacy: .public): a stretch brought back, \(trims.trims.count) left")
+		events.yield(.changed(id))
+	}
+
+	/// The session's folder, once its transcript is complete (notes being or already written).
+	private func trimmableFolder(_ id: String) throws -> NotesSessionFolder {
+		let folder = folder(id)
+		guard id != capturingID, let session = sessions[id] ?? folder.loadManifest(),
+		      session.stage == .noting || session.stage == .done else { throw NotesError.transcriptIncomplete }
+		return folder
 	}
 
 	func delete(_ id: String) throws {
@@ -902,6 +1073,28 @@ actor NotesEngine {
 	func deleteVoiceprint() throws {
 		try voiceprints.delete(Voiceprint.userID)
 		logger.notice("Voiceprint deleted")
+	}
+
+	// MARK: - Speaker names
+
+	func nameSpeaker(_ id: String, speaker: Int, name: String, remember: Bool) throws {
+		let folder = folder(id)
+		guard var registry = registry(id) else { throw SpeakerNamingError.notRenamable }
+		try SpeakerNaming.apply(name: name, to: speaker, remember: remember, registry: &registry, store: voiceprints)
+		try folder.saveSpeakers(registry)
+		if registries[id] != nil { registries[id] = registry }
+		logger.notice("Notes session \(id, privacy: .public): speaker \(speaker) named\(registry.speaker(speaker)?.voiceprintID == nil ? "" : ", voice saved", privacy: .public)")
+		events.yield(.changed(id))
+	}
+
+	func rememberedVoices() -> [Voiceprint] {
+		voiceprints.all().filter { !$0.isUser }
+	}
+
+	func forgetRememberedVoice(_ voiceprintID: String) throws {
+		guard voiceprintID != Voiceprint.userID else { return }
+		try voiceprints.delete(voiceprintID)
+		logger.notice("Remembered voice deleted")
 	}
 
 	private static func sessionIDs() -> [String] {

@@ -173,6 +173,10 @@ struct AppFeature {
         state.activeTab = .coach
         return .none
 
+      case .settings(.openNotesSettings):
+        state.activeTab = .notes
+        return .send(.notes(.select(nil)))
+
       case .settings(.deleteCoachData), .settings(.setSpeechCoachEnabled(false)):
         if state.activeTab == .coach { state.activeTab = .settings }
         state.coach = .init()

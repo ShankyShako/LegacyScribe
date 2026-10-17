@@ -32,6 +32,9 @@ struct RecordingClient {
   /// The first few seconds of the dictation being recorded (16 kHz mono floats), for Super's early
   /// detection; empty when nothing is recording or the AVAudioRecorder fallback is in use.
   var recordingHead: @Sendable () async -> [Float] = { [] }
+  /// The recording in progress as 16 kHz mono chunks (pre-roll first) for the live caption; nil when nothing is
+  /// recording or the AVAudioRecorder fallback is in use. One consumer per dictation.
+  var recordingSamples: @Sendable () async -> AsyncStream<[Float]>? = { nil }
   var requestMicrophoneAccess: @Sendable () async -> Bool = { false }
   var observeAudioLevel: @Sendable () async -> AsyncStream<Meter> = { AsyncStream { _ in } }
   var getAvailableInputDevices: @Sendable () async -> [AudioInputDevice] = { [] }
@@ -50,6 +53,7 @@ extension RecordingClient: DependencyKey {
       startRecording: { await live.startRecording() },
       stopRecording: { await live.stopRecording() },
       recordingHead: { await live.recordingHead() },
+      recordingSamples: { await live.recordingSamples() },
       requestMicrophoneAccess: { await live.requestMicrophoneAccess() },
       observeAudioLevel: { await live.observeAudioLevel() },
       getAvailableInputDevices: { await live.getAvailableInputDevices() },
@@ -1666,6 +1670,10 @@ actor RecordingClientLive {
 
   func recordingHead() -> [Float] {
     captureController.recordingHead()
+  }
+
+  func recordingSamples() -> AsyncStream<[Float]>? {
+    captureController.recordingSamples()
   }
 
   func warmUpRecorder() async {
