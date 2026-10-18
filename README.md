@@ -6,7 +6,9 @@ I built it for myself, to dictate prompts to coding agents and notes all day. It
 
 ## What it does
 
-**Talk.** Hold Right ⌥ to record and release to paste. Double-tap to lock recording on, tap again to stop, Esc to cancel. Left ⌥ stays free for typing.
+**Talk.** Hold Right ⌥ to record and release to paste. Double-tap to lock recording on, tap again to stop, Esc to cancel. Left ⌥ stays free for typing. Cancelled by mistake? The notice under the indicator has an Undo button for 30 seconds. A key brushed while the last dictation is still being processed is ignored, so it can't cost you that dictation.
+
+**Live caption.** Your words appear on screen while you speak, under the indicator, above the Dock, or wherever you drag it (Settings → Live caption). They come from Apple's on-device speech model, about two thirds of a second behind you. The newest word is dimmed until it settles.
 
 **Speech-to-text, on-device.** Pick an engine in Settings:
 
@@ -22,8 +24,8 @@ Cohere is the most accurate but needs a 1.4 GB download and ~2 GB of memory whil
 **Rewrite modes.** Each dictation goes through one of three modes, switched with ⌃⌥ (hold ⌃, tap ⌥ to step through them, like ⌘-Tab). A fourth, Notes, is described below.
 
 - **Raw** pastes the transcript as heard.
-- **Clean** removes filler words, false starts and repeats, and fixes punctuation.
-- **Prompt** rewrites the dictation for a coding assistant. A short one becomes plain sentences. A long ramble becomes a summary, sections, one bullet per point, and the open questions at the end. Nothing is dropped and nothing is invented.
+- **Clean** removes filler words, false starts and repeats, and fixes punctuation. When you correct yourself ("two, no, make it three") only the correction is kept, and a long dictation is broken into paragraphs where the topic changes.
+- **Prompt** rewrites the dictation for a coding assistant. A single point stays as plain sentences. Anything longer becomes a numbered list, one short paragraph per topic in the order you said them, with your questions kept as questions. Nothing is dropped and nothing is invented.
 
 Choose who rewrites in the **AI Rewrite** tab:
 
@@ -33,6 +35,10 @@ Choose who rewrites in the **AI Rewrite** tab:
 
 Until one is set up, dictations are pasted as heard. If the AI fails or is slow, an optional backup AI is tried, and if that fails too the raw transcript is pasted with a notice. A failed LLM never costs you a dictation. Answers cut off at the token limit, and answers far longer than what you said, are rejected rather than pasted. Each mode's instructions can be edited in Settings. API keys are kept in the Keychain.
 
+**Spoken instructions.** Start a dictation with "Legacy," or "Lucy," followed by a pause and it's an instruction instead of text. With text selected, "Legacy, make this friendlier" rewrites the selection. With nothing selected, "Lucy, write a reply saying I'll be there at six" writes at the cursor, using the text around it as context. The indicator changes about a second after you say the word. If the AI fails, nothing is pasted and your dictation is copied instead.
+
+**Fits the sentence it lands in.** Dictate into the middle of a sentence and the app lowercases the first word (names and "I" stay as they are), drops a closing period that doesn't belong, and adds the spaces where words meet.
+
 **Code talk (Prompt mode).** Say "slash review" and `/review` reaches the assistant as a runnable command, even if every endpoint is down. "claude dot md", "dash dash verbose" and "camel case user id" come out as `CLAUDE.md`, `--verbose` and `userId`.
 
 **Add to what's already there (Prompt mode).** If the text box you're dictating into already holds a draft, the app reads it through Accessibility and asks the model to merge the new dictation into it. "Add cheesecake" extends the list in the box instead of pasting a second prompt. If the merge would lose existing lines, or the box changed while the model worked, the transcript is pasted at the cursor instead.
@@ -41,11 +47,15 @@ Until one is set up, dictations are pasted as heard. If the AI fails or is slow,
 
 **Notes.** Pick Notes (⌃⌥4), tap Right ⌥ and think out loud for up to 2 hours, hands-free, then tap again. Cohere transcribes while you talk, 25 seconds at a time, and a model on your Mac (the one downloaded in AI Rewrite, or Ollama) turns the transcript into notes afterwards: topics, one bullet per point, action items and open questions. Nothing is sent off the Mac and no audio is kept. Each chunk is written to disk and committed to the transcript before its audio is deleted, so a crash or quit loses at most the last 30 seconds, and an unfinished session resumes at the next launch. Sessions are in the Notes tab, and can also be saved as Markdown to a folder such as an Obsidian vault.
 
+Notes show who said what: your own voice is "You" once the app has learned it from your History recordings (Notes settings → Speakers → Learn) and other voices are Speaker 2, 3 and so on. Click a speaker to name them, and the app can recognise that voice in later sessions. A voice is stored as a list of numbers, never as a recording, and stays on the Mac. You can edit a finished transcript to fix misheard names, or trim a tangent out of the notes without deleting it from the transcript, then write the notes again.
+
 **Read-aloud practice.** 280 sentences that cover all 39 English sounds and 881 sound pairs, plus my own jargon. Practice runs in sets of up to 10 that fill the gaps you haven't recorded yet. Each take is trimmed, saved as 16-bit audio with its text, and scored, and the folder doubles as a benchmark fixture. "Check my recordings" grades how much of each line the engine heard right, aiming for 95%. A second engine of a different kind listens too, so a word you read differently (both engines heard "equitable" for "equatable") doesn't count against the engine; it's listed for you to practice instead.
 
-**Private mode.** Turn it on in the menu bar menu or Settings → General and nothing leaves the Mac: only the on-device model rewrites (other AIs are skipped and the text is pasted as heard), and there are no update checks or downloads. It's enforced underneath too: every network request the app or its libraries make fails while it's on. A lock shows on the menu bar icon and while recording.
+**Speech Coach.** An optional tab (turn it on at the bottom of Settings) that shows how you speak in your History recordings: filler words, self-corrections, crutch words and hedges, sentence length, pace and pauses. Each count comes with short clips of your own recordings, played next to a clean sentence of yours for comparison. There's a setting for people who stutter that leaves repeats and mid-sentence pauses out of the counts. It all runs on the Mac.
 
-**History.** Every dictation is kept: the text forever, the audio for 30 days by default (Settings → History → Keep Recordings), except recordings you corrected before sending, which are kept as training data. Play an entry and its words light up as they're spoken.
+**Private mode.** Turn it on in the menu bar menu or the card at the top of Settings and nothing leaves the Mac: only the on-device model rewrites (other AIs are skipped and the text is pasted as heard), and there are no update checks or downloads. It's enforced underneath too: every network request the app or its libraries make fails while it's on. A lock shows on the menu bar icon and while recording.
+
+**History.** Every dictation is kept: the text forever, the audio for 30 days by default (Settings → History → Keep Recordings), except recordings you corrected before sending, which are kept as training data. Play an entry and its words light up as they're spoken. If speech-to-text fails, the recording is kept and History has a Retry button. Any entry can be redone as Clean or Prompt, or transcribed again with another downloaded engine to compare.
 
 **Voice isolation.** For noisy places, Settings → Microphone → Voice isolation records dictation through Apple's voice processing, which keeps the voice nearest the microphone and turns down people talking around you. Set Mic Mode to Voice Isolation (the button opens it) for the strongest effect. Notes has its own switch, off by default so a meeting keeps every voice.
 

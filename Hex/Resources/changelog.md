@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0
+
+First LegacyScribe release. See the README for everything it does: on-device speech-to-text (Parakeet, Cohere, Apple Speech, Whisper), Raw/Clean/Prompt rewriting on your Mac or a cloud AI with your own key, live caption, "Legacy" spoken instructions, Notes mode with speaker labels, the Speech Coach and Private mode.
+
+Earlier entries are from Hex, the app LegacyScribe is forked from.
+
 ## 0.8.5
 
 ### Patch Changes
